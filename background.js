@@ -83,7 +83,8 @@ chrome.runtime.onConnect.addListener(port => {
       if (command === 'translate') validateText(message.text);
       if (command === 'translate' && message.pageTranslation && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error('翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
       await ensureEngine();
-      await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation });
+      await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation,
+        ...(command === 'cancel' ? { force: message.force === true, requestId: typeof message.requestId === 'string' ? message.requestId : undefined } : {}) });
     } catch (error) { send({ id, error: error.message }); }
   });
   port.onDisconnect.addListener(() => {
@@ -103,7 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         .then(() => deliver()).catch(() => deliver('译文已生成，但本地历史保存失败。'));
     } else deliver();
   } else {
-    for (const port of clients.values()) { try { port.postMessage(message); } catch {} }
+    for (const [owner, port] of clients) { try { port.postMessage({ ...message, ownJob: message.jobOwner === owner }); } catch {} }
   }
 });
 // API credentials stay in extension storage and are never exposed to content scripts.

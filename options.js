@@ -1,10 +1,11 @@
-import { DEFAULTS, validateSettings, MAX_INPUT } from './shared.js';
+import { DEFAULTS, validateSettings, validateText, MAX_INPUT, extensionRuntime, EXTENSION_CONTEXT_ERROR } from './shared.js';
 const $ = id => document.getElementById(id);
 let port, serial = 0, active, savedEngine = DEFAULTS.engine;
 let capability = null, downloading = false;
 let historyRequest = 0, historySearchTimer, historyWarning = '';
 const pending = new Map();
-function show(text) { $('message').textContent = text; }
+function show(text) { $('message').textContent = text; $('message').hidden = false; }
+function inputStatus(text) { $('input-status').textContent = text; show(text); $('message').hidden = true; }
 function updateAvailability() {
   const compatible = capability?.backend === $('engine').value && capability.supported;
   $('download').disabled = downloading || !compatible || $('engine').value !== savedEngine;
@@ -21,6 +22,11 @@ function updateAvailability() {
     : '勾选下载确认后，点击下载所选引擎的模型。';
   $('download').setAttribute('aria-busy', String(downloading));
   $('translate').disabled = !!active || ($('mode').value === 'local' && (!compatible || $('engine').value !== savedEngine));
+  $('translate').textContent = active ? '正在翻译…' : '翻译';
+  $('translate').setAttribute('aria-busy', String(!!active));
+  $('cancel').disabled = !active;
+  $('input-clear').disabled = !!active;
+  $('input-copy').disabled = !!active || !$('translation').textContent;
 }
 function renderSupport(support) {
   if (!support || support.backend !== $('engine').value) return;
@@ -41,11 +47,14 @@ function render(state) {
   renderSupport(state.support);
 }
 function connection() {
+  const runtime = extensionRuntime();
   if (port) return port;
-  port = chrome.runtime.connect({ name: 'translator' });
+  try { port = runtime.connect({ name: 'translator' }); }
+  catch (error) { throw new Error(/context invalidated/i.test(error.message) ? EXTENSION_CONTEXT_ERROR : error.message); }
   port.onMessage.addListener(message => {
     if (message.state) render(message.state);
-    if (message.partial !== undefined && message.id === active) $('translation').textContent = message.partial;
+    if (message.state && active && message.ownJob) $('input-status').textContent = message.state.text;
+    if (message.partial !== undefined && message.id === active) { $('translation').textContent = message.partial; $('input-status').textContent = '正在生成译文…'; }
     const request = pending.get(message.id);
     if (!request || (!message.error && !('result' in message))) return;
     if (message.id === active && message.historyError) historyWarning = message.historyError;
@@ -53,8 +62,11 @@ function connection() {
     message.error ? request.reject(new Error(message.error)) : request.resolve(message.result);
   });
   port.onDisconnect.addListener(() => {
+    // Read lastError while the disconnect callback is active to avoid an unchecked runtime error.
+    const detail = chrome.runtime?.lastError?.message;
     port = null;
-    for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('后台连接已中断，请重试。')); }
+    const message = detail && /context invalidated|receiving end does not exist/i.test(detail) ? EXTENSION_CONTEXT_ERROR : '后台连接已中断，请重试；更新扩展后请关闭旧翻译页面并重新打开。';
+    for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(message)); }
     pending.clear();
   });
   return port;
@@ -159,20 +171,58 @@ $('clear').addEventListener('click', () => {
 $('release').addEventListener('click', () => operation($('release'), 'release', '模型显存已释放。'));
 $('refresh').addEventListener('click', () => operation($('refresh'), 'status', '状态已更新。'));
 $('source').maxLength = MAX_INPUT * 2;
-$('translate').addEventListener('click', async () => {
-  if ($('engine').value !== savedEngine) { show('请先保存所选引擎，再翻译。'); return; }
+function countInput() {
+  const length = [...$('source').value].length;
+  $('input-count').textContent = `${length} / ${MAX_INPUT} 字符${length > MAX_INPUT ? '，请缩短后再翻译' : ''}`;
+  $('source').setAttribute('aria-invalid', String(length > MAX_INPUT));
+}
+$('source').addEventListener('input', countInput);
+$('source').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+    event.preventDefault(); if (!$('translate').disabled) $('translate').click();
+  }
+});
+$('input-clear').addEventListener('click', () => {
   if (active) return;
-  const sourceText = $('source').value;
-  const id = `settings-${++serial}`; active = id; historyWarning = ''; $('translate').disabled = true; $('trial-comparison').hidden = false; $('trial-original').textContent = sourceText; $('translation').textContent = ''; show('正在准备翻译…');
-  try { const text = await call('translate', { text: sourceText }, id); if (active === id) { $('translation').textContent = text; show(historyWarning || '翻译完成。'); await loadHistory(); } }
-  catch (error) { if (active === id) show(error.message); }
+  $('source').value = ''; $('translation').textContent = ''; $('trial-original').textContent = '';
+  $('trial-comparison').hidden = true; countInput(); updateAvailability(); inputStatus('已清空，可以输入新的文字。'); $('source').focus();
+});
+$('input-copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('translation').textContent); inputStatus('译文已复制。'); }
+  catch { inputStatus('复制失败，请在译文区域选择文字后手动复制。'); }
+});
+$('input-open').addEventListener('click', async () => {
+  try {
+    const runtime = extensionRuntime();
+    await chrome.tabs.create({ url: runtime.getURL('options.html#input-translation') });
+    inputStatus('已打开独立标签页，请在新页面输入文字。');
+  } catch (error) { inputStatus(error.message); }
+});
+$('translate').addEventListener('click', async () => {
+  if ($('engine').value !== savedEngine) { inputStatus('请先保存所选引擎，再翻译。'); return; }
+  if (active) return;
+  let sourceText;
+  try {
+    if (!$('source').value.trim()) throw new Error('请先输入需要翻译的文字。');
+    if ([...$('source').value].length > MAX_INPUT) throw new Error(`最多支持 ${MAX_INPUT} 个字符，请缩短输入后重试。`);
+    sourceText = validateText($('source').value);
+  }
+  catch (error) { inputStatus(error.message); countInput(); $('source').focus(); return; }
+  const id = `settings-${++serial}`; active = id; historyWarning = ''; $('trial-comparison').hidden = false; $('trial-original').textContent = sourceText; $('translation').textContent = ''; updateAvailability(); inputStatus('正在准备翻译…');
+  try { const text = await call('translate', { text: sourceText }, id); if (active === id) { $('translation').textContent = text; inputStatus(historyWarning || '翻译完成。'); await loadHistory(); } }
+  catch (error) { if (active === id) inputStatus(error.message); }
   finally { active = null; updateAvailability(); }
 });
-$('cancel').addEventListener('click', () => call('cancel').then(() => show('已请求取消，等待当前操作结束。')).catch(error => show(error.message)));
+$('cancel').addEventListener('click', () => call('cancel').then(() => inputStatus('已请求取消，等待当前操作结束。')).catch(error => inputStatus(error.message)));
 try {
   loadHistory();
   const settings = await call('settings');
   savedEngine = settings.engine;
   for (const key of Object.keys(DEFAULTS)) $(key).value = settings[key];
   toggle(); await call('status');
-} catch (error) { show(error.message); }
+} catch (error) {
+  inputStatus(error.message);
+  $('device').textContent = '扩展初始化失败，请按提示重新打开';
+  $('phase').textContent = '未连接';
+  $('input-status').textContent = error.message;
+}

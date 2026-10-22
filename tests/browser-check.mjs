@@ -94,11 +94,52 @@ try {
   }
   if (!status?.device || status.device === '正在检测…') throw new Error('MV3 messaging/offscreen initialization failed: ' + JSON.stringify(status));
   console.log('REAL_CHROME_STATUS', JSON.stringify(status));
-  await evaluate(sessionId, `document.getElementById('source').value='Hello, world!';document.getElementById('translate').click()`);
+  await evaluate(sessionId, `document.getElementById('source').value='Hello, world!';document.getElementById('source').dispatchEvent(new Event('input'));document.getElementById('translate').click()`);
   await pause(1200);
   const first = await evaluate(sessionId, `document.getElementById('message').textContent`);
   if (!/首次使用|WebGPU|兼容/.test(first) && status.cache !== '完整缓存，可离线使用') throw new Error('Expected consent or unsupported-device message: ' + first);
   console.log('FIRST_USE', first);
+  if (process.argv.includes('--ui')) {
+    const layouts = [];
+    for (const width of [360, 560, 1200]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
+      await evaluate(sessionId, `window.scrollTo(0,0)`);
+      const layout = await evaluate(sessionId, `({width:innerWidth,clientWidth:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,main:document.querySelector('main').getBoundingClientRect().width,source:document.getElementById('source').getBoundingClientRect().width,navLinks:[...document.querySelectorAll('.section-nav a')].every(a=>!!document.querySelector(a.getAttribute('href'))),hiddenPreserved:document.getElementById('api-fields').hidden && getComputedStyle(document.getElementById('api-fields')).display==='none'})`);
+      if (layout.scrollWidth > layout.clientWidth || !layout.navLinks || !layout.hiddenPreserved || layout.source < 200) throw new Error('Responsive UI failed: '+JSON.stringify(layout));
+      await cdp('Page.enable', {}, sessionId);
+      const screenshot = await cdp('Page.captureScreenshot', {format:'png'}, sessionId);
+      await fs.writeFile(`tests/ui-${width}.png`,Buffer.from(screenshot.data,'base64'));
+      layouts.push(layout);
+    }
+    await evaluate(sessionId, `document.querySelector('.section-nav a[href="#history"]').click()`);
+    const navigation = await evaluate(sessionId, `({hash:location.hash,top:document.getElementById('history').getBoundingClientRect().top,navBottom:document.querySelector('.section-nav').getBoundingClientRect().bottom})`);
+    if(navigation.hash!=='#history' || navigation.top < navigation.navBottom) throw new Error('Navigation obscured target: '+JSON.stringify(navigation));
+    await evaluate(sessionId, `document.querySelector('.section-nav a[href="#input-translation"]').click()`);
+    evidence.push({type:'responsive-ui',layouts,navigation});
+    console.log('UI',JSON.stringify(evidence.at(-1)));
+  }
+  if (process.argv.includes('--input-translation')) {
+    const controls = await evaluate(sessionId, `({firstSection:document.querySelector('main>section').id, cancel:document.getElementById('cancel').disabled, copy:document.getElementById('input-copy').disabled})`);
+    if (controls.firstSection !== 'input-translation' || !controls.cancel || !controls.copy) throw new Error('Input entry/control state failed');
+    await evaluate(sessionId, `document.getElementById('input-clear').click();document.getElementById('translate').click()`);
+    if (!(await evaluate(sessionId, `document.getElementById('input-status').textContent`)).includes('请先输入')) throw new Error('Empty input was not rejected');
+    const limit = await evaluate(sessionId, `(() => {
+      const source=document.getElementById('source');source.value='😀'.repeat(601);source.dispatchEvent(new Event('input'));document.getElementById('translate').click();
+      return {count:document.getElementById('input-count').textContent,invalid:source.getAttribute('aria-invalid'),status:document.getElementById('input-status').textContent};
+    })()`);
+    if (!limit.count.startsWith('601 / 600') || limit.invalid !== 'true' || !limit.status.includes('缩短输入')) throw new Error('Unicode input limit failed: '+JSON.stringify(limit));
+    await evaluate(sessionId, `document.getElementById('source').value='Hello, world!';document.getElementById('source').dispatchEvent(new Event('input'));document.getElementById('source').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true}))`);
+    await pause(800);
+    const retry = await evaluate(sessionId, `({status:document.getElementById('input-status').textContent,original:document.getElementById('trial-original').textContent,busy:document.getElementById('translate').getAttribute('aria-busy')})`);
+    if (!retry.status.includes('首次使用') || retry.original !== 'Hello, world!' || retry.busy !== 'false') throw new Error('Keyboard/real engine error/retry failed: '+JSON.stringify(retry));
+    await evaluate(sessionId, `document.getElementById('input-clear').click()`);
+    if (!(await evaluate(sessionId, `document.getElementById('source').value==='' && document.getElementById('trial-comparison').hidden && document.getElementById('input-count').textContent==='0 / 600 字符'`))) throw new Error('Clear failed');
+    await evaluate(sessionId, `document.getElementById('input-open').click()`); await pause(500);
+    const tabs = await cdp('Target.getTargets');
+    if (!tabs.targetInfos.some(tab=>tab.url===origin+'/options.html#input-translation')) throw new Error('Standalone input page did not open');
+    evidence.push({type:'input-ui-real-uncached-engine',prominentEntry:true,unicodeLimit:limit,keyboardAndError:retry,clear:true,standaloneTab:true});
+    console.log('INPUT_TRANSLATION',JSON.stringify(evidence.at(-1)));
+  }
   if (process.argv.includes('--page-translation')) {
     const page = await cdp('Target.createTarget', { url: `http://127.0.0.1:${server.address().port}/` });
     const attached = await cdp('Target.attachToTarget', { targetId: page.targetId, flatten: true });
@@ -123,21 +164,27 @@ try {
     await evaluate(pageSession, await fs.readFile('page-translator.js', 'utf8'));
     const workflow = await evaluate(pageSession, `(async () => {
       // Controlled DOM/scheduling fixtures only. These outputs are not model translations.
-      const calls = []; let inFlight = 0, maxInFlight = 0, mode = 'local', held, holdNext = false;
+      const calls = []; let inFlight = 0, maxInFlight = 0, mode = 'local', held, heldProgress, holdNext = false, panelRoot;
       const fixture = document.getElementById('fixture'); const before = fixture.innerHTML;
       let clicks = 0; document.getElementById('counter').addEventListener('click',()=>clicks++);
-      const request = async (command, options) => {
+      const request = async (command, options, onProgress) => {
         if (command === 'settings') return {mode,engine:'webllm',target:'auto'};
         if (command === 'cancel') { held?.('[UI fixture cancelled]'); held = null; return true; }
         if (command !== 'translate') return true;
         calls.push(options); inFlight++; maxInFlight = Math.max(maxInFlight,inFlight);
         let value;
-        if (holdNext) { holdNext = false; value = await new Promise(resolve=>held=resolve); }
+        if (holdNext) { holdNext = false; onProgress?.({phase:'loading',progress:.4,text:'Controlled loader fixture'}); heldProgress=onProgress; value = await new Promise(resolve=>held=resolve); }
         else { await new Promise(resolve=>setTimeout(resolve,5)); value = '[UI fixture, not model output] ' + options.text; }
         inFlight--; return value;
       };
+      const nativeAttachShadow=Element.prototype.attachShadow;
+      Element.prototype.attachShadow=function(options){const root=nativeAttachShadow.call(this,options);if(this.matches('[data-local-translator-ui="page"]'))panelRoot=root;return root};
       const controller = LocalPageTranslation.create({request});
       await controller.start();
+      Element.prototype.attachShadow=nativeAttachShadow;
+      const iconButtons=[...panelRoot.querySelectorAll('.icon-button')], close=panelRoot.getElementById('page-close'), heading=panelRoot.querySelector('.panel-heading');
+      if(iconButtons.length!==5 || iconButtons.some(button=>!button.querySelector('svg') || button.textContent || button.title!==button.getAttribute('aria-label'))) throw new Error('Whole-page icon controls missing labels or icons');
+      if(close.parentElement!==heading || Math.abs(close.getBoundingClientRect().right-heading.getBoundingClientRect().right)>1) throw new Error('Whole-page close is not at top right');
       if (maxInFlight !== 1 || calls.some(call=>[...call.text].length>600 || !call.pageTranslation)) throw new Error('Batching/serialization failed');
       if (!calls.some(call=>call.text==='Another paragraph.') || calls.some(call=>/Private|Click counter/.test(call.text))) throw new Error('DOM extraction/skip rules failed');
       if (!document.getElementById('one').querySelector('strong') || !document.getElementById('one').querySelector('[data-local-page-translation]')) throw new Error('Inline original was not preserved');
@@ -152,14 +199,30 @@ try {
       controller.restore();
       holdNext=true; const stopping=controller.start();
       while(!held) await new Promise(resolve=>setTimeout(resolve,5));
+      if(!panelRoot.getElementById('page-status').textContent.includes('正在加载模型（40%）')) throw new Error('Loading progress was hidden behind 0/n');
+      heldProgress({phase:'translating',partial:'[UI fixture partial, not inference]'});
+      if(!panelRoot.getElementById('page-status').textContent.includes('已生成') || !document.querySelector('[data-local-page-translation]').textContent.includes('UI fixture partial')) throw new Error('Streaming generation was not shown before segment completion');
       controller.restore(); await stopping;
       if (document.querySelector('[data-local-page-translation]')) throw new Error('Cancelled task inserted a late translation');
       mode='api'; const beforeAPI=calls.length; await controller.start();
       if (calls.length!==beforeAPI) throw new Error('API page text sent before explicit confirmation');
+      if(panelRoot.getElementById('page-start').getAttribute('aria-label')!=='确认使用 API 翻译本页' || !panelRoot.getElementById('page-start').querySelector('svg')) throw new Error('API confirmation lost its label or icon');
       await controller.start();
       if (calls.length===beforeAPI) throw new Error('Confirmed API batch did not proceed');
       controller.restore();
-      return {type:'whole-page-explicit-dom-fixtures-not-inference',segments:firstCount,maxInFlight,excludesSensitiveInputs:true,inlineDOMPreserved:true,restore:true,eventListenersPreserved:true,continueSkipsDone:true,dynamicContent:true,cancelRejectsLateResults:true,apiRequiresConfirmation:true};
+      close.click();
+      if(!panelRoot.host.hidden || getComputedStyle(panelRoot.host).display!=='none' || panelRoot.querySelector('.panel').getClientRects().length) throw new Error('Whole-page close button did not visually hide panel');
+      mode='local'; holdNext=true; const closingRun=controller.start();
+      while(!held) await new Promise(resolve=>setTimeout(resolve,5));
+      if(panelRoot.host.hidden || !panelRoot.querySelector('.panel').getClientRects().length) throw new Error('Closed panel did not reopen');
+      close.click();
+      if(getComputedStyle(panelRoot.host).display!=='none' || panelRoot.querySelector('.panel').getClientRects().length) throw new Error('Active panel did not close immediately');
+      await closingRun;
+      if(controller.isRunning() || getComputedStyle(panelRoot.host).display!=='none') throw new Error('Closed task remained active or reopened panel');
+      await controller.start();
+      if(!panelRoot.querySelector('.panel').getClientRects().length) throw new Error('Panel did not reopen after cancellation');
+      controller.restore(); close.click();
+      return {type:'whole-page-explicit-dom-fixtures-not-inference',segments:firstCount,maxInFlight,excludesSensitiveInputs:true,inlineDOMPreserved:true,restore:true,eventListenersPreserved:true,continueSkipsDone:true,dynamicContent:true,cancelRejectsLateResults:true,apiRequiresConfirmation:true,loadingProgressVisible:true,streamingVisibleBeforeCompletion:true,closeActuallyHides:true,closeDuringTranslation:true,reopenAfterClose:true};
     })()`);
     evidence.push({ type: 'production-whole-page-uncached-error', status: productionStatus }, workflow);
     console.log('WHOLE_PAGE', JSON.stringify(evidence));
@@ -178,7 +241,7 @@ try {
       const node = findPopupNode(tree.root, node => {
         const attrs = node.attributes || [];
         if (id) { for (let i = 0; i < attrs.length; i += 2) if (attrs[i] === 'id' && attrs[i + 1] === id) return true; }
-        return label && node.nodeName === 'BUTTON' && node.children?.some(child => child.nodeValue === label);
+        return label && node.nodeName === 'BUTTON' && attrs.some((value,index)=>index%2===0 && value==='aria-label' && attrs[index+1]===label);
       });
       if (!node) throw new Error('Popup node missing: ' + (id || label));
       return node;
@@ -186,7 +249,7 @@ try {
     async function popupState() {
       const node = await popupNode('box');
       const object = await cdp('DOM.resolveNode', { nodeId: node.nodeId }, pageSession);
-      const result = await cdp('Runtime.callFunctionOn', { objectId: object.object.objectId, functionDeclaration: 'function(){return {hidden:this.hidden,status:this.querySelector("#status").textContent}}', returnByValue: true }, pageSession);
+      const result = await cdp('Runtime.callFunctionOn', { objectId: object.object.objectId, functionDeclaration: 'function(){const close=this.querySelector("#close"),heading=this.querySelector(".popup-heading");return {hidden:this.hidden,status:this.querySelector("#status").textContent,icons:[...this.querySelectorAll(".icon-button")].every(button=>button.querySelector("svg") && !button.textContent && button.title===button.getAttribute("aria-label")),iconCount:this.querySelectorAll(".icon-button").length,closeTopRight:close.parentElement===heading && Math.abs(close.getBoundingClientRect().right-heading.getBoundingClientRect().right)<1}}', returnByValue: true }, pageSession);
       return result.result.value;
     }
     async function realClick(id, label) {
@@ -206,6 +269,7 @@ try {
     await realClick('trigger');
     const opened = await popupState();
     if (opened.hidden) throw new Error('Popup closed after real mouse click: ' + JSON.stringify(opened));
+    if (!opened.icons || opened.iconCount !== 5 || !opened.closeTopRight) throw new Error('Icon controls/close placement failed: '+JSON.stringify(opened));
     await realClick(null, '重试');
     if ((await popupState()).hidden) throw new Error('Retry closed the popup');
     await realClick(null, '取消');
@@ -357,7 +421,7 @@ try {
       if (tries === 179) throw new Error('Selection popup timed out: ' + JSON.stringify(popup));
       await pause(1000);
     }
-    if (!popup.text || !popup.status.includes('文字未上传')) throw new Error('Invalid selection popup result: ' + JSON.stringify(popup));
+    if (!popup.text || popup.status !== '') throw new Error('Invalid selection popup result: ' + JSON.stringify(popup));
     evidence.push({ type: 'real-selection-popup', input: 'Hello, world!', ...popup });
     console.log('REAL_SELECTION_POPUP', JSON.stringify(popup));
     if (process.argv.includes('--history')) {
@@ -366,7 +430,7 @@ try {
       if (originalNode?.children?.map(node => node.nodeValue).join('') !== 'Hello, world!') throw new Error('Popup original text is missing');
       const boxNode = find(currentTree.root, 'box');
       const boxObject = await cdp('DOM.resolveNode', { nodeId: boxNode.nodeId }, attached.sessionId);
-      await cdp('Runtime.callFunctionOn', { objectId: boxObject.object.objectId, functionDeclaration: 'function(){Array.from(this.querySelectorAll("button")).find(button=>button.textContent==="翻译历史").click()}' }, attached.sessionId);
+      await cdp('Runtime.callFunctionOn', { objectId: boxObject.object.objectId, functionDeclaration: 'function(){this.querySelector("button[aria-label=翻译历史]").click()}' }, attached.sessionId);
       let historyTarget;
       for (let tries = 0; tries < 40; tries++) {
         historyTarget = (await cdp('Target.getTargets')).targetInfos.find(target => target.url === origin + '/options.html#history');
@@ -405,7 +469,7 @@ try {
       console.log('HISTORY', JSON.stringify(evidence.at(-1)));
     }
   }
-  const resultFile = process.argv.includes('--page-translation') ? 'tests/page-translation-result.json' : process.argv.includes('--history-ui') ? 'tests/history-ui-result.json' : process.argv.includes('--history') ? 'tests/history-browser-result.json' : process.argv.includes('--selection-popup') ? 'tests/selection-popup-result.json' : process.argv.includes('--download-button') ? 'tests/download-button-result.json' : process.argv.includes('--device-check') ? 'tests/device-browser-result.json' : process.argv.includes('--transformers') ? (process.argv.includes('--inference') ? 'tests/transformers-browser-result.json' : 'tests/transformers-smoke-result.json') : 'tests/browser-result.json';
+  const resultFile = process.argv.includes('--ui') ? 'tests/ui-result.json' : process.argv.includes('--input-translation') ? 'tests/input-translation-result.json' : process.argv.includes('--page-translation') ? 'tests/page-translation-result.json' : process.argv.includes('--history-ui') ? 'tests/history-ui-result.json' : process.argv.includes('--history') ? 'tests/history-browser-result.json' : process.argv.includes('--selection-popup') ? 'tests/selection-popup-result.json' : process.argv.includes('--download-button') ? 'tests/download-button-result.json' : process.argv.includes('--device-check') ? 'tests/device-browser-result.json' : process.argv.includes('--transformers') ? (process.argv.includes('--inference') ? 'tests/transformers-browser-result.json' : 'tests/transformers-smoke-result.json') : 'tests/browser-result.json';
   await fs.writeFile(resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
 } finally {
   server.close();

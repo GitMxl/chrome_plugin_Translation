@@ -6,6 +6,11 @@ export const TF_REVISION = '22942cb7d7ba4cc81bb4673549ca4d4614469b5e';
 export const TF_BASE = `https://huggingface.co/${TF_MODEL_ID}/resolve/${TF_REVISION}/`;
 export const TF_CACHE = 'translator-transformers';
 export const DEFAULTS = { mode: 'local', engine: 'webllm', target: 'auto', endpoint: '', apiKey: '', apiModel: '' };
+export const EXTENSION_CONTEXT_ERROR = '扩展连接不可用。请在 chrome://extensions 确认插件已启用，再点击浏览器工具栏的扩展图标打开翻译；不要直接打开 options.html 文件或本地预览地址。重新加载插件后，请关闭旧翻译标签页并重新打开，同时刷新需要划词的网页。';
+export function extensionRuntime(browser = globalThis.chrome) {
+  if (!browser?.runtime?.id || typeof browser.runtime.connect !== 'function') throw new Error(EXTENSION_CONTEXT_ERROR);
+  return browser.runtime;
+}
 export function validateText(text) {
   if (typeof text !== 'string' || !text.trim()) throw new Error('请先选择需要翻译的文字。');
   if ([...text].length > MAX_INPUT) throw new Error(`最多支持 ${MAX_INPUT} 个字符，请缩短选区后重试。`);

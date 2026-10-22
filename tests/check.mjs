@@ -9,6 +9,7 @@ import './device-support.mjs';
 import './history-store.mjs';
 import './history-background.mjs';
 import './page-translator.mjs';
+import './runtime-context.mjs';
 
 assert.equal(DEFAULTS.mode, 'local');
 assert.equal(DEFAULTS.engine, 'webllm');
@@ -113,9 +114,10 @@ assert.match(outputs.at(-1).error, /不支持 WebGPU/);
 assert.equal(network.length, 0);
 // Renew MV3 routing only during pending operations.
 const routed = [];
-let routingTimer, routeListener, testWorker;
+let routingTimer, routeListener, testWorker, routingNow = 0, createdWorkers = 0;
 const offscreenContext = vm.createContext({
-  Worker: class { constructor() { testWorker = this; } postMessage() {} terminate() {} },
+  Date: class extends Date { static now() { return routingNow; } },
+  Worker: class { constructor() { testWorker = this; createdWorkers++; } postMessage() {} terminate() {} },
   setInterval: callback => { routingTimer = callback; },
   chrome: { runtime: { id: 'test', getURL: file => 'chrome-extension://test/' + file,
     sendMessage: async message => { routed.push(message); }, onMessage: { addListener: callback => { routeListener = callback; } } } }
@@ -127,4 +129,26 @@ routingTimer(); assert.equal(routed.at(-1).heartbeat, true);
 testWorker.onmessage({ data: { id: 'download', owner: 'one', result: true } });
 const routingCount = routed.length;
 routingTimer(); assert.equal(routed.length, routingCount, 'idle offscreen contexts must not send heartbeats');
+const route = message => routeListener({ target: 'engine', owner: 'one', ...message }, { id: 'test', url: 'chrome-extension://test/background.js' }, () => {});
+route({ command: 'translate', id: 'stall' });
+routingNow += 170000;
+testWorker.onmessage({ data: { jobOwner: 'one', jobId: 'stall', state: { phase: 'loading' } } });
+routingNow += 170000; routingTimer();
+assert.equal(createdWorkers, 1, 'real task progress must refresh the inactivity deadline');
+routingNow += 180001; routingTimer();
+assert.equal(createdWorkers, 2, 'stalled inference must release the worker instead of remaining busy');
+assert.match(routed.find(message => message.id === 'stall' && message.error).error, /超时/);
+route({ command: 'translate', id: 'cancel-me' });
+route({ command: 'cancel', id: 'wrong-owner', owner: 'two', force: true, requestId: 'cancel-me' });
+assert.equal(createdWorkers, 2, 'another page must not reset this page task');
+const oldWorker = testWorker;
+route({ command: 'cancel', id: 'right-owner', force: true, requestId: 'cancel-me' });
+assert.equal(createdWorkers, 3, 'explicit page cancellation must release loading/inference resources');
+const afterRestart = routed.length;
+oldWorker.onmessage({ data: { owner: 'one', id: 'cancel-me', result: 'late result' } });
+assert.equal(routed.length, afterRestart, 'replaced workers must not deliver stale results');
+route({ command: 'translate', id: 'absolute-deadline' });
+routingNow += 600001;
+testWorker.onmessage({ data: { jobOwner: 'one', jobId: 'absolute-deadline', state: { phase: 'loading' } } });
+routingTimer(); assert.equal(createdWorkers, 4, 'repeated progress must not bypass the absolute deadline');
 console.log('PASS: syntax, manifest/CSP, local WASM, language/prompt/input, API validation, cache-only policy, engine reuse, concurrency, cancellation, release, cache cleanup and active-task lifecycle heartbeat.');

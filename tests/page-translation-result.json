@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-22T03:39:22.217Z",
+  "date": "2026-10-22T07:18:25.863Z",
   "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "status": {
     "device": "WebGPU 可用 · intel · 基础兼容性检测通过",
@@ -20,11 +20,11 @@
   "evidence": [
     {
       "type": "production-whole-page-uncached-error",
-      "status": "翻译中断（0 / 6）：首次使用需下载约 300 MB 模型数据（建议预留 400 MB 磁盘、约 1.1 GB 显存）。请打开设置并确认下载。 已完成的段落保留，可点击继续重试。"
+      "status": "翻译中断（0 / 9）：首次使用需下载约 300 MB 模型数据（建议预留 400 MB 磁盘、约 1.1 GB 显存）。请打开设置并确认下载。 已完成的段落保留，可点击继续重试。"
     },
     {
       "type": "whole-page-explicit-dom-fixtures-not-inference",
-      "segments": 6,
+      "segments": 9,
       "maxInFlight": 1,
       "excludesSensitiveInputs": true,
       "inlineDOMPreserved": true,
@@ -33,7 +33,12 @@
       "continueSkipsDone": true,
       "dynamicContent": true,
       "cancelRejectsLateResults": true,
-      "apiRequiresConfirmation": true
+      "apiRequiresConfirmation": true,
+      "loadingProgressVisible": true,
+      "streamingVisibleBeforeCompletion": true,
+      "closeActuallyHides": true,
+      "closeDuringTranslation": true,
+      "reopenAfterClose": true
     }
   ]
 }

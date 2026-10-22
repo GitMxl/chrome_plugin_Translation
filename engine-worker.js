@@ -26,7 +26,7 @@ Cache.prototype.addAll = async function(inputs) {
 let engine, loadedBackend, busy = false, current, idleTimer;
 let state = { phase: 'idle', text: '尚未加载模型', progress: 0, cached: false, device: '尚未检测', supported: false };
 const send = data => postMessage(data);
-function publish(patch) { state = { ...state, ...patch }; send({ state }); }
+function publish(patch) { state = { ...state, ...patch }; send({ state, ...(current ? { jobOwner: current.job.owner, jobId: current.job.id } : {}) }); }
 function reply(job, result) { send({ owner: job.owner, id: job.id, result }); }
 function fail(job, error) { send({ owner: job.owner, id: job.id, error: error.message || String(error) }); }
 async function inspectCache(backend = 'webllm') {
