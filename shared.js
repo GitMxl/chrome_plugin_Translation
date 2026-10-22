@@ -1,3 +1,6 @@
+import './languages.js';
+export const { isTargetLanguage, languageLabel, populateTargets } = globalThis.LocalTranslationLanguages;
+export const TARGET_LANGUAGES = globalThis.LocalTranslationLanguages.targets;
 export const MODEL_ID = 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC';
 export const MODEL_BASE = 'https://huggingface.co/mlc-ai/Qwen2.5-0.5B-Instruct-q4f32_1-MLC/resolve/8e6ec5f417c7d0e1414703ef619b8a24686e3ab0/';
 export const MAX_INPUT = 600;
@@ -17,8 +20,9 @@ export function validateText(text) {
   return text.trim();
 }
 export function targetLanguage(text, target = 'auto') {
-  if (target === 'en') return 'English';
-  if (target === 'zh') return '简体中文';
+  const language = TARGET_LANGUAGES.find(language => language.code === target);
+  if (!language) throw new Error('无效的目标语言。');
+  if (target !== 'auto') return language.name;
   const han = (text.match(/\p{Script=Han}/gu) || []).length;
   const latin = (text.match(/[a-z]/gi) || []).length;
   return han > 0 && han * 2 >= latin ? 'English' : '简体中文';
@@ -31,7 +35,7 @@ export function messagesFor(text, target) {
 }
 export function validateSettings(input) {
   const value = { ...DEFAULTS, ...input };
-  if (!['local', 'api'].includes(value.mode) || !['webllm', 'transformers'].includes(value.engine) || !['auto', 'zh', 'en'].includes(value.target)) throw new Error('无效的翻译模式、推理引擎或目标语言。');
+  if (!['local', 'api'].includes(value.mode) || !['webllm', 'transformers'].includes(value.engine) || !isTargetLanguage(value.target)) throw new Error('无效的翻译模式、推理引擎或目标语言。');
   if (value.mode === 'api') {
     const url = new URL(value.endpoint);
     if (url.username || url.password || url.hash || url.search) throw new Error('API 地址不能包含账户、查询参数或片段。');

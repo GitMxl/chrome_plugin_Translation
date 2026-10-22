@@ -1,3 +1,4 @@
+import { TARGET_LANGUAGES } from './shared.js';
 export const HISTORY_LIMIT = 200;
 const ITEMS = 'translationHistory';
 const ENABLED = 'translationHistoryEnabled';
@@ -6,7 +7,7 @@ function valid(item) {
     && typeof item.source === 'string' && [...item.source].length <= 600
     && typeof item.translation === 'string' && item.translation.length <= 12000
     && ['local', 'api'].includes(item.mode) && ['webllm', 'transformers'].includes(item.engine)
-    && ['English', '简体中文'].includes(item.target);
+    && TARGET_LANGUAGES.some(language => language.code !== 'auto' && language.name === item.target);
 }
 export function createHistoryStore(storage, { now = () => Date.now(), makeId = () => crypto.randomUUID() } = {}) {
   let tail = Promise.resolve();

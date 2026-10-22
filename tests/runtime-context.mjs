@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import { DEFAULTS, MAX_INPUT, validateSettings, validateText, extensionRuntime, EXTENSION_CONTEXT_ERROR } from '../shared.js';
+import { DEFAULTS, MAX_INPUT, validateSettings, validateText, extensionRuntime, EXTENSION_CONTEXT_ERROR, languageLabel } from '../shared.js';
 
 for (const browser of [undefined, {}, { runtime: {} }, { runtime: { connect() {} } }]) {
   assert.throws(() => extensionRuntime(browser), { message: EXTENSION_CONTEXT_ERROR });
@@ -15,7 +15,7 @@ for (const browser of [{}, { runtime: { id: 'old-extension', connect() { throw n
     if (!elements.has(id)) elements.set(id, { value: DEFAULTS[id] || '', textContent: '', addEventListener() {} });
     return elements.get(id);
   } };
-  const context = vm.createContext({ document, chrome: browser, DEFAULTS, MAX_INPUT, validateSettings, validateText,
+  const context = vm.createContext({ document, chrome: browser, DEFAULTS, MAX_INPUT, validateSettings, validateText, languageLabel, populateTargets() {},
     extensionRuntime: () => extensionRuntime(browser), EXTENSION_CONTEXT_ERROR,
     setTimeout(fn) { const timer = {}; timers.add(timer); return timer; }, clearTimeout(timer) { timers.delete(timer); } });
   await vm.runInContext(`(async () => { ${source}\n })()`, context);

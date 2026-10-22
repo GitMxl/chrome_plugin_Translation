@@ -4,18 +4,18 @@
 <body><main>
   <header><div class="brand"><span class="brand-mark" aria-hidden="true">译</span><div><span class="badge">LOCAL TRANSLATOR</span><h1>本地划词翻译</h1></div><span class="brand-tag">本机推理 · 隐私优先</span></div><p>读懂另一种语言，从一句话开始。</p></header>
   <nav class="section-nav" aria-label="功能导航"><a href="#input-translation">输入翻译</a><a href="#page-tools">整页翻译</a><a href="#image-tools">图片翻译</a><a href="#history">翻译历史</a><a href="#preferences">翻译设置</a><a href="#local-model">模型管理</a></nav>
-  <section id="input-translation"><div class="section-heading"><h2>输入翻译</h2><span class="section-tag">中文 ⇄ English</span></div><p class="section-intro">输入或粘贴文字，使用已保存的翻译偏好。</p>
+  <section id="input-translation"><div class="section-heading"><h2>输入翻译</h2><span class="section-tag">多语言翻译</span></div><p class="section-intro">输入或粘贴文字，使用已保存的翻译偏好。</p>
     <label for="source">待翻译原文<textarea id="source" rows="5" aria-describedby="input-count input-privacy" placeholder="在这里输入或粘贴需要翻译的文字…"></textarea></label>
     <div class="input-meta"><span class="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 翻译 · Mac 用 ⌘</span><p id="input-count">0 / 600 字符</p></div><p id="input-privacy">本地模式在电脑上翻译；主动启用 API 模式后，输入文字会发送至你配置的服务。</p>
     <div class="actions"><button id="translate">翻译</button><button id="cancel" class="secondary" disabled>取消翻译</button><button id="input-clear" class="secondary">清空</button><button id="input-open" class="secondary">在标签页中打开</button></div>
     <p id="input-status" role="status" aria-live="polite">首次使用请先在下方确认下载模型。</p>
-    <div id="trial-comparison" class="bilingual-grid" hidden><div><h3>原文</h3><pre id="trial-original"></pre></div><div><h3>译文</h3><pre id="translation" aria-live="polite"></pre></div></div>
+    <div id="trial-comparison" class="bilingual-grid" hidden><div><h3>原文</h3><pre id="trial-original"></pre></div><div><h3>译文</h3><pre id="translation" dir="auto" aria-live="polite"></pre></div></div>
     <button id="input-copy" class="secondary" disabled>复制译文</button>
   </section>
   <section id="preferences"><div class="section-heading"><h2>翻译偏好</h2><span class="section-tag">按你的习惯</span></div><form id="settings">
     <label>当前翻译模式<select id="mode"><option value="local">本地模型（默认，无 API）</option><option value="api">自定义 API（主动启用）</option></select></label>
     <label>本地推理引擎<select id="engine"><option value="webllm">WebLLM（默认，约 300 MB）</option><option value="transformers">Transformers.js（ONNX WebGPU，约 800 MB）</option></select></label>
-    <label>目标语言<select id="target"><option value="auto">自动中英互译（中文 → 英文，其他 → 简体中文）</option><option value="zh">始终翻译为简体中文</option><option value="en">始终翻译为英文</option></select></label>
+    <label>目标语言<select id="target"><option value="auto">自动中英互译</option></select></label><p class="fine-print">自动模式保持中英互译；其他目标语言需手动选择，译文效果取决于当前模型。</p>
     <div id="api-fields" hidden><p class="notice">API 模式会把选中文字发送到下面的服务。API 密钥仅保存在当前扩展的本地存储。</p>
     <label>完整 Chat Completions 地址<input id="endpoint" type="url" placeholder="https://your-service.example/v1/chat/completions"></label>
     <label>模型名称<input id="apiModel" placeholder="服务提供的模型名称"></label>

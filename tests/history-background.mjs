@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import { DEFAULTS, validateSettings, validateText } from '../shared.js';
+import { DEFAULTS, validateSettings, validateText, isTargetLanguage } from '../shared.js';
 import { createHistoryStore } from '../history-store.js';
 let sequence = 0, onConnect, onMessage;
 const saved = {}, ports = [];
 const storage = { get: async () => JSON.parse(JSON.stringify(saved)), set: async value => Object.assign(saved, value), setAccessLevel: async () => {} };
 const runtime = { id: 'test', getURL: file => 'chrome-extension://test/' + file, onConnect: { addListener: callback => { onConnect = callback; } }, onMessage: { addListener: callback => { onMessage = callback; } }, sendMessage: async () => {}, openOptionsPage: async () => {} };
-const context = vm.createContext({ DEFAULTS, validateSettings, validateText,
+const context = vm.createContext({ DEFAULTS, validateSettings, validateText, isTargetLanguage,
   createHistoryStore: store => createHistoryStore(store, { makeId: () => `record-${++sequence}` }),
   crypto: { randomUUID: () => `owner-${++sequence}` },
   chrome: { runtime, storage: { local: storage }, tabs: { create: async () => {} } }

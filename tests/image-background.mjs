@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import { DEFAULTS, validateSettings, validateText } from '../shared.js';
+import { DEFAULTS, validateSettings, validateText, isTargetLanguage, TARGET_LANGUAGES } from '../shared.js';
 import { createHistoryStore } from '../history-store.js';
 let connect, captured = 0, serial = 0, switched = false, failOpen = false;
 let currentURL = 'https://example.test/';
 let installed, menuClick;
 const menus = [];
+const engineRequests = [];
 const temporary = { 'image-capture-expired': { created: 0, data: 'old' } }, created = [];
 const runtime = { id: 'test', getURL: file => 'chrome-extension://test/' + file,
-  onConnect: { addListener: listener => { connect = listener; } }, onInstalled: { addListener: listener => { installed = listener; } }, onMessage: { addListener() {} }, sendMessage: async () => {} };
-const context = vm.createContext({ DEFAULTS, validateSettings, validateText, createHistoryStore, Date, encodeURIComponent,
+  onConnect: { addListener: listener => { connect = listener; } }, onInstalled: { addListener: listener => { installed = listener; } }, onMessage: { addListener() {} }, getContexts: async () => [{}], sendMessage: async message => { engineRequests.push(message); } };
+const context = vm.createContext({ DEFAULTS, validateSettings, validateText, isTargetLanguage, createHistoryStore, Date, encodeURIComponent,
   crypto: { randomUUID: () => `abc-${++serial}` },
   chrome: { runtime, contextMenus: { removeAll: callback => { menus.length = 0; callback(); }, create: menu => menus.push(menu), onClicked: { addListener: listener => { menuClick = listener; } } }, storage: {
     local: { get: async () => ({ settings: DEFAULTS }), setAccessLevel: async () => {} },
@@ -62,4 +63,21 @@ assert.equal(captured, capturedBefore + 1);
 assert.match(created.at(-1).url, /image\.html\?error=/);
 assert.match(decodeURIComponent(created.at(-1).url), /网页已切换/);
 assert.match((await webpage('translate', { text: 'hello', imageTranslation: true, settingsSnapshot: { ...DEFAULTS, mode: 'api' } })).error, /重新截图/);
+for (const { code: translationTarget } of TARGET_LANGUAGES) {
+  for (const surface of [{}, { pageTranslation: true }, { imageTranslation: true }]) {
+    await webpage('translate', { text: 'hello', ...surface, settingsSnapshot: { ...DEFAULTS }, translationTarget });
+    assert.equal(engineRequests.at(-1).settings.target, translationTarget);
+    assert.equal(engineRequests.at(-1).recordHistory, !surface.pageTranslation && !surface.imageTranslation);
+    assert.equal(DEFAULTS.target, 'auto', 'temporary target must never change saved/default settings');
+  }
+}
+await webpage('translate', { text: 'hello' });
+assert.equal(engineRequests.at(-1).settings.target, DEFAULTS.target);
+for (const translationTarget of ['invalid', '', null, 1, {}]) {
+  const count = engineRequests.length;
+  assert.match((await webpage('translate', { text: 'hello', translationTarget })).error, /无效的目标语言/);
+  assert.equal(engineRequests.length, count);
+}
+assert.match((await webpage('translate', { text: 'hello', imageTranslation: true, settingsSnapshot: { ...DEFAULTS, mode: 'api' }, translationTarget: 'en' })).error, /重新截图/);
 console.log('PASS: screenshot entry permission, image/page context menus, originating tab validation, visible menu errors, expiry, failed-tab cleanup and image translation mode snapshot.');
+console.log('PASS: all three translation surfaces accept validated temporary targets, preserve global preferences and retain mode snapshot protection.');

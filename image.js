@@ -1,6 +1,8 @@
-import { extensionRuntime, validateText, MAX_INPUT } from './shared.js';
+import { extensionRuntime, validateText, MAX_INPUT, populateTargets } from './shared.js';
 import { imageRegion, normalizeOCRText } from './image-region.js';
 const $ = id => document.getElementById(id);
+populateTargets($('image-target'), true);
+$('result').dir = 'auto';
 let region, start, worker, busy = false, translating = false, generation = 0, port, serial = 0, active, settings;
 const pending = new Map();
 function status(text) { $('image-status').textContent = text; }
@@ -9,6 +11,7 @@ function update() {
   $('reselect').disabled = busy || translating || !$('capture').naturalWidth;
   $('ocr-cancel').disabled = !busy;
   $('ocr-text').disabled = busy;
+  $('image-target').disabled = busy || translating;
   $('capture-stage').setAttribute('aria-busy', String(busy || translating));
   const size = [...$('ocr-text').value].length;
   $('ocr-count').textContent = `${size} / ${MAX_INPUT} 字符${size > MAX_INPUT ? '，请删减或重新框选更小区域' : ''}`;
@@ -84,6 +87,11 @@ $('recognize').addEventListener('click', async () => {
   finally { clearTimeout(timeout); if (current) await current.terminate().catch(() => {}); if (job === generation) { worker = null; busy = false; update(); } }
 });
 $('ocr-text').addEventListener('input', update);
+$('image-target').addEventListener('change', () => {
+  if (translating) return;
+  $('result').textContent = ''; $('comparison').hidden = true;
+  $('translation-status').textContent = '目标语言已切换，点击翻译即可，无需重新识别图片。'; update();
+});
 $('image-translate').addEventListener('click', async () => {
   if (busy || translating) return;
   try {
@@ -91,7 +99,7 @@ $('image-translate').addEventListener('click', async () => {
     translating = true; $('comparison').hidden = false; $('original').textContent = text; $('result').textContent = ''; update();
     $('translation-status').textContent = '正在准备翻译…';
     // Require the mode displayed in this tab; avoid silently uploading after a settings change.
-    const result = await call('translate', { text, imageTranslation: true, settingsSnapshot: settings });
+    const result = await call('translate', { text, imageTranslation: true, settingsSnapshot: settings, translationTarget: $('image-target').value || undefined });
     $('result').textContent = result; $('translation-status').textContent = '翻译完成。';
   } catch (error) { $('translation-status').textContent = error.message; }
   finally { translating = false; active = null; update(); }

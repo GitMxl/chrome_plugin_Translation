@@ -2,6 +2,12 @@
   const MAX_SEGMENTS = 500, MAX_CHARS = 60000;
   const EXCLUDE = 'script,style,noscript,template,textarea,input,select,button,form,pre,code,svg,math,canvas,iframe,[contenteditable]:not([contenteditable="false"]),[hidden],[aria-hidden="true"],[data-local-translator-ui],[data-local-page-translation]';
   const BLOCK = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,dt,dd,figcaption,div,section,article,main';
+  function targetSelector(id) {
+    const label = document.createElement('label'); label.className = 'target-language'; label.textContent = '目标语言 ';
+    const select = document.createElement('select'); select.id = id;
+    globalThis.LocalTranslationLanguages.populateTargets(select, true);
+    label.append(select); return { label, select };
+  }
   function eligible(node) {
     const parent = node.parentElement;
     if (!parent || !node.nodeValue || parent.closest(EXCLUDE)) return false;
@@ -57,7 +63,7 @@
     return { items, segments, limited };
   }
   function create({ request, selectionBusy = () => false }) {
-    let toolbar, shadow, status, progress, startButton, stopButton, restoreButton, settingsButton;
+    let toolbar, shadow, status, progress, startButton, stopButton, restoreButton, settingsButton, targetSelect;
     let running = false, cancelled = false, apiApproval = null, runNumber = 0, pendingNode, ticker;
     const done = new Map();
     function init() {
@@ -68,6 +74,13 @@
       const style = document.createElement('style'); style.textContent = ':host{all:initial}.panel{width:340px;max-width:calc(100vw - 32px);padding:14px;background:#fff;color:#19324c;border:1px solid #cbd6e6;border-radius:12px;box-shadow:0 6px 28px #18345230;font:13px/1.6 system-ui}strong{font-size:14px}p{white-space:pre-wrap;overflow-wrap:anywhere;margin:7px 0}progress{width:100%;accent-color:#285bd6}.actions{display:flex;gap:6px;flex-wrap:wrap}button{cursor:pointer;padding:6px 9px;border:1px solid #d1dbe8;border-radius:6px;background:#eef3fd;color:#234883;font:12px system-ui}button:disabled{cursor:not-allowed;opacity:.5}[hidden]{display:none!important}';
       style.textContent += '*{box-sizing:border-box}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.icon-button{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex-shrink:0;padding:7px;border-color:#dce6e2;background:#f5f8f6;color:#49665b}.icon-button:hover{background:#e5f0e9;color:#14786b}.icon-button:focus-visible{outline:2px solid #14786b;outline-offset:2px}.icon-button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}#page-close{border-color:transparent;background:transparent;color:#7a8983}#page-close:hover{background:#fff0ed;color:#ad5048}#page-start{background:#14786b;border-color:#14786b;color:#fff}#page-start:hover{background:#106357}progress{accent-color:#14786b}.actions{border-top:1px solid #e4ebe6;padding-top:10px;margin-top:10px;gap:8px}';
       const panel = document.createElement('section'); panel.className = 'panel'; panel.setAttribute('aria-label', '整页翻译');
+      style.textContent += '.target-language{display:flex;align-items:center;gap:8px;margin:8px 0}select{min-width:0;flex:1;border:1px solid #ccd8d2;border-radius:6px;padding:6px;background:#fff;color:#19324c;font:13px system-ui}select:disabled{opacity:.6}';
+      const language = targetSelector('page-target'); targetSelect = language.select;
+      targetSelect.addEventListener('change', () => {
+        if (running) return;
+        apiApproval = null; startLabel('翻译 / 继续'); progress.value = 0;
+        status.textContent = '目标语言已切换，点击「翻译 / 继续」重新翻译页面。';
+      });
       const title = document.createElement('strong'); title.textContent = '整页双语翻译';
       status = document.createElement('p'); status.id = 'page-status'; status.setAttribute('role', 'status'); status.textContent = '准备翻译当前页面';
       progress = document.createElement('progress'); progress.id = 'page-progress'; progress.max = 1; progress.value = 0;
@@ -88,7 +101,7 @@
       const closeButton = button('关闭面板', 'close', () => { panelVisible(false); stop(); }); closeButton.id = 'page-close';
       const heading = document.createElement('div'); heading.className = 'panel-heading'; heading.append(title, closeButton);
       actions.append(startButton, stopButton, restoreButton, settingsButton);
-      panel.append(heading, status, progress, actions); shadow.append(style, panel); document.documentElement.append(toolbar);
+      panel.append(heading, language.label, status, progress, actions); shadow.append(style, panel); document.documentElement.append(toolbar);
     }
     function panelVisible(visible) {
       toolbar.hidden = !visible;
@@ -120,13 +133,15 @@
       if (selectionBusy()) { status.textContent = '划词翻译正在进行，请先取消或等待完成。'; return; }
       const run = ++runNumber;
       running = true; cancelled = false; startButton.disabled = true; stopButton.disabled = false;
+      targetSelect.disabled = true;
+      const translationTarget = targetSelect.value || undefined;
       const alive = () => !cancelled && run === runNumber;
       let completed = 0, total = 0, skipped = 0;
       try {
         for (const [element, result] of done) if (!element.isConnected || !result.node.isConnected) { result.node.remove(); done.delete(element); }
         const settings = await request('settings');
         if (!alive()) return;
-        const signature = JSON.stringify([settings.mode, settings.engine, settings.target]);
+        const signature = JSON.stringify([settings.mode, settings.engine, translationTarget || settings.target]);
         if (settings.mode === 'api' && apiApproval !== signature) {
           apiApproval = signature;
           startLabel('确认使用 API 翻译本页');
@@ -134,6 +149,9 @@
           return;
         }
         apiApproval = null; startLabel('翻译 / 继续');
+        for (const [element, result] of done) {
+          if (result.signature !== signature) { result.node.remove(); done.delete(element); }
+        }
         status.textContent = '正在收集页面中的可见正文…';
         const plan = await collect(done, signature, () => !alive());
         if (!alive()) return;
@@ -143,7 +161,7 @@
           if (!alive()) break;
           if (!item.element.isConnected || originalText(item.element) !== item.source) { skipped += item.parts.length; continue; }
           const translated = [];
-          const node = document.createElement('span'); node.setAttribute('data-local-page-translation', ''); node.setAttribute('aria-busy', 'true');
+          const node = document.createElement('span'); node.setAttribute('data-local-page-translation', ''); node.setAttribute('aria-busy', 'true'); node.dir = 'auto';
           node.style.cssText = 'display:block;white-space:pre-wrap;overflow-wrap:anywhere;border-left:3px solid #5081dd;padding:6px 10px;margin:6px 0;color:inherit;background:rgba(80,129,221,.08);font:inherit';
           item.element.append(node); pendingNode = node;
           for (const part of item.parts) {
@@ -154,7 +172,7 @@
               status.textContent = `已完成 ${completed} / ${total} 段，正在处理第 ${completed + 1} 段\n${stage} · 已等待 ${Math.floor((Date.now() - started) / 1000)} 秒${partial ? ` · 已生成 ${[...partial].length} 字` : ''}`;
             };
             renderProgress(); clearInterval(ticker); ticker = setInterval(renderProgress, 1000);
-            const result = await request('translate', { text: part, pageTranslation: true, settingsSnapshot: settings }, update => {
+            const result = await request('translate', { text: part, pageTranslation: true, settingsSnapshot: settings, translationTarget }, update => {
               if (!alive() || !node.isConnected) return;
               if (update.phase === 'loading' || update.phase === 'downloading') stage = `正在加载模型${Number.isFinite(update.progress) ? `（${Math.round(update.progress * 100)}%）` : ''}${update.text ? '：' + update.text : ''}`;
               else if (update.phase === 'translating') stage = '正在生成译文';
@@ -179,10 +197,10 @@
       } finally {
         clearInterval(ticker); ticker = null; pendingNode?.remove(); pendingNode = null;
         if (cancelled && run === runNumber) status.textContent = `已停止，完成 ${completed} / ${total} 段。已显示的译文保留，可继续或还原。`;
-        running = false; startButton.disabled = false; stopButton.disabled = true;
+        running = false; startButton.disabled = false; stopButton.disabled = true; targetSelect.disabled = false;
       }
     }
     return { start, stop, restore, isRunning: () => running };
   }
-  globalThis.LocalPageTranslation = Object.freeze({ create, splitText });
+  globalThis.LocalPageTranslation = Object.freeze({ create, splitText, targetSelector });
 })();

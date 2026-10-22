@@ -1,5 +1,6 @@
-import { DEFAULTS, validateSettings, validateText, MAX_INPUT, extensionRuntime, EXTENSION_CONTEXT_ERROR } from './shared.js';
+import { DEFAULTS, validateSettings, validateText, MAX_INPUT, extensionRuntime, EXTENSION_CONTEXT_ERROR, populateTargets, languageLabel } from './shared.js';
 const $ = id => document.getElementById(id);
+populateTargets($('target'));
 let port, serial = 0, active, savedEngine = DEFAULTS.engine;
 let capability = null, downloading = false;
 let historyRequest = 0, historySearchTimer, historyWarning = '';
@@ -102,11 +103,11 @@ async function loadHistory() {
     const cards = data.items.map(item => {
       const card = document.createElement('article'); card.className = 'history-card'; card.dataset.historyId = item.id;
       const meta = document.createElement('p'); meta.className = 'history-meta';
-      meta.textContent = `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.target === 'English' ? '英文' : '简体中文'} · ${item.mode === 'api' ? '自定义 API' : item.engine === 'transformers' ? 'Transformers.js' : 'WebLLM'}`;
+      meta.textContent = `${new Date(item.createdAt).toLocaleString('zh-CN')} · ${languageLabel(item.target)} · ${item.mode === 'api' ? '自定义 API' : item.engine === 'transformers' ? 'Transformers.js' : 'WebLLM'}`;
       const pair = document.createElement('div'); pair.className = 'bilingual-grid';
       for (const [label, text] of [['原文', item.source], ['译文', item.translation]]) {
         const column = document.createElement('div'), heading = document.createElement('h3'), body = document.createElement('pre');
-        heading.textContent = label; body.textContent = text; column.append(heading, body); pair.append(column);
+        heading.textContent = label; body.textContent = text; body.dir = 'auto'; column.append(heading, body); pair.append(column);
       }
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '删除此条';
       remove.addEventListener('click', async () => {

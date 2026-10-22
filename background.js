@@ -1,4 +1,4 @@
-import { DEFAULTS, validateSettings, validateText } from './shared.js';
+import { DEFAULTS, validateSettings, validateText, isTargetLanguage } from './shared.js';
 import { createHistoryStore } from './history-store.js';
 const history = createHistoryStore(chrome.storage.local);
 let creating;
@@ -107,6 +107,10 @@ chrome.runtime.onConnect.addListener(port => {
       if (['download', 'clear', 'release'].includes(command) && message.engine !== config.engine) throw new Error('推理引擎设置已变化，请重新打开设置页并确认后操作。');
       if (command === 'translate') validateText(message.text);
       if (command === 'translate' && (message.pageTranslation || message.imageTranslation) && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error(message.imageTranslation ? '翻译设置已变更，请重新截图以确认当前模式。' : '翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
+      if (command === 'translate' && message.translationTarget !== undefined) {
+        if (!isTargetLanguage(message.translationTarget)) throw new Error('无效的目标语言。');
+        config.target = message.translationTarget;
+      }
       await ensureEngine();
       await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation && !message.imageTranslation,
         ...(command === 'cancel' ? { force: message.force === true, requestId: typeof message.requestId === 'string' ? message.requestId : undefined } : {}) });

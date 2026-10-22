@@ -1,5 +1,5 @@
 (() => {
-  let host, root, box, original, output, status, trigger, port, active, selection = '', requestNumber = 0;
+  let host, root, box, original, output, status, trigger, port, active, targetSelect, selection = '', requestNumber = 0;
   const requests = new Map();
   const pageTranslator = globalThis.LocalPageTranslation.create({
     request: (command, extra, onProgress) => {
@@ -97,35 +97,40 @@
     trigger.addEventListener('mousedown', event => event.preventDefault());
     box = document.createElement('section'); box.id = 'box'; box.hidden = true; box.setAttribute('aria-label', '划词翻译');
     const title = document.createElement('h3'); title.textContent = '划词翻译';
+    const language = globalThis.LocalPageTranslation.targetSelector('selection-target'); targetSelect = language.select;
+    style.textContent += '.target-language{display:flex;align-items:center;gap:8px;margin:8px 0}select{min-width:0;flex:1;border:1px solid #ccd8d2;border-radius:6px;padding:6px;background:#fff;color:#19324c;font:13px system-ui}select:disabled{opacity:.6}';
+    targetSelect.addEventListener('change', () => { if (!active && selection) translate(); });
     const heading = document.createElement('div'); heading.className = 'popup-heading';
     const closeButton = iconButton('关闭', 'close', close); closeButton.id = 'close';
     heading.append(title, closeButton);
     status = document.createElement('div'); status.id = 'status'; status.setAttribute('role', 'status');
-    output = document.createElement('div'); output.id = 'output';
+    output = document.createElement('div'); output.id = 'output'; output.dir = 'auto';
     original = document.createElement('div'); original.id = 'original';
     const comparison = document.createElement('div'); comparison.className = 'comparison';
     const sourceLabel = document.createElement('div'); sourceLabel.className = 'label'; sourceLabel.textContent = '原文';
     const translationLabel = document.createElement('div'); translationLabel.className = 'label'; translationLabel.textContent = '译文';
     comparison.append(sourceLabel, original, translationLabel, output);
     const actions = document.createElement('div'); actions.className = 'actions';
-    actions.append(iconButton('重试', 'retry', translate), iconButton('取消', 'cancel', () => { const old = active; active = null; call('cancel').catch(() => {}); if (old) status.textContent = '已请求取消'; }), iconButton('设置 / 下载模型', 'settings', () => call('open-settings').catch(error => { status.textContent = error.message; })));
+    actions.append(iconButton('重试', 'retry', translate), iconButton('取消', 'cancel', () => { const old = active; active = null; targetSelect.disabled = false; call('cancel').catch(() => {}); if (old) status.textContent = '已请求取消'; }), iconButton('设置 / 下载模型', 'settings', () => call('open-settings').catch(error => { status.textContent = error.message; })));
     actions.append(iconButton('翻译历史', 'history', () => call('open-history').catch(error => { status.textContent = error.message; })));
-    box.append(heading, status, comparison, actions); root.append(style, trigger, box); document.documentElement.append(host);
+    box.append(heading, language.label, status, comparison, actions); root.append(style, trigger, box); document.documentElement.append(host);
   }
-  function close() { if (!host) return; trigger.hidden = true; box.hidden = true; const wasActive = !!active; active = null; if (wasActive) call('cancel').catch(() => {}); }
+  function close() { if (!host) return; trigger.hidden = true; box.hidden = true; const wasActive = !!active; active = null; targetSelect.disabled = false; if (wasActive) call('cancel').catch(() => {}); }
   async function translate() {
     if (pageTranslator.isRunning()) { status.textContent = '整页翻译正在进行，请先停止整页任务。'; return; }
     if (active) { status.textContent = '请先取消当前任务，等待结束后重试。'; return; }
     const sourceText = selection;
+    const translationTarget = targetSelect.value || undefined;
     const id = `page-${++requestNumber}`; active = id; historyWarning = ''; original.textContent = sourceText; output.textContent = ''; status.textContent = '正在准备翻译…';
+    targetSelect.disabled = true;
     try {
       const settings = await call('settings');
       if (active !== id) return;
       status.textContent = settings.mode === 'api' ? 'API 模式：文字将发送至你配置的服务…' : '正在准备本地模型…';
-      const result = await call('translate', { text: sourceText }, id);
+      const result = await call('translate', { text: sourceText, translationTarget }, id);
       if (active === id) { output.textContent = result; status.textContent = [settings.mode === 'api' ? 'API 翻译完成' : '', historyWarning].filter(Boolean).join(' · '); }
     } catch (error) { if (active === id) status.textContent = error.message; }
-    finally { if (active === id) active = null; }
+    finally { if (active === id) active = null; targetSelect.disabled = !!active; }
   }
   function fromOverlay(event) {
     return !!event.target?.closest?.('[data-local-translator-ui]') || (!!host && (event.target === host || event.composedPath().includes(host)));
@@ -137,7 +142,7 @@
     if (!text || !sel.rangeCount) { if (!active && trigger) trigger.hidden = true; return; }
     init();
     if (active) call('cancel').catch(() => {});
-    active = null; selection = text; box.hidden = true;
+    active = null; targetSelect.disabled = false; selection = text; box.hidden = true;
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     const left = Math.max(10, Math.min(rect.left, window.innerWidth - 375));
     const top = Math.max(10, Math.min(rect.bottom + 8, window.innerHeight - 240));

@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
+import { TARGET_LANGUAGES } from '../shared.js';
 const cwd = process.cwd();
 const chrome = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 // Fresh profiles avoid Chromium blocking command-line-installed extensions after restart.
@@ -14,11 +15,17 @@ const server = http.createServer((request, response) => {
   if (request.url === '/image-api') {
     let body = '';
     request.on('data', chunk => { body += chunk; });
-    request.on('end', () => { imageAPIRequests.push(JSON.parse(body)); response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '你好，世界！' }, finish_reason: 'stop' }] })); });
+    request.on('end', () => {
+      const payload = JSON.parse(body); imageAPIRequests.push(payload);
+      const instruction = payload.messages[0].content;
+      // Fixed fixtures verify routing/rendering; these are not model translations.
+      const content = instruction.includes('to Arabic.') ? 'مرحبًا بالعالم!' : instruction.includes('to Japanese.') ? 'こんにちは、世界！' : instruction.includes('to English.') ? 'Hello, world!' : '你好，世界！';
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }));
+    });
     return;
   }
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
-  if (process.argv.includes('--page-translation')) {
+  if (process.argv.includes('--page-translation') && request.url !== '/selection') {
     response.end('<!doctype html><html lang="en"><title>Whole-page test fixture</title><main id="fixture"><h1 id="heading">Page fixture heading</h1><p id="one">Hello <strong>world</strong>!</p><p id="two"><span>Another</span> <em>paragraph.</em></p><p id="long">' + 'Long sentence. '.repeat(90) + '</p><form><label>Private form text<input value="Private input"></label></form><pre>Private code sample</pre><div style="display:none">Private hidden text</div><p contenteditable="true">Private editable text</p><p>123456</p><button id="counter">Click counter</button><div id="dynamic"></div></main></html>');
     return;
   }
@@ -100,11 +107,26 @@ try {
     if (status?.device && status.device !== '正在检测…') break; await pause(500);
   }
   if (!status?.device || status.device === '正在检测…') throw new Error('MV3 messaging/offscreen initialization failed: ' + JSON.stringify(status));
+  const expectedTargets = TARGET_LANGUAGES.map(language => language.code);
+  const settingsTargets = await evaluate(sessionId, `Array.from(document.getElementById('target').options, option=>option.value)`);
+  if (JSON.stringify(settingsTargets)!==JSON.stringify(expectedTargets)) throw new Error('Global target menu differs from language catalog');
   console.log('REAL_CHROME_STATUS', JSON.stringify(status));
   await evaluate(sessionId, `document.getElementById('source').value='Hello, world!';document.getElementById('source').dispatchEvent(new Event('input'));document.getElementById('translate').click()`);
   await pause(1200);
   const first = await evaluate(sessionId, `document.getElementById('message').textContent`);
   if (!/首次使用|WebGPU|兼容/.test(first) && status.cache !== '完整缓存，可离线使用') throw new Error('Expected consent or unsupported-device message: ' + first);
+  if (process.argv.includes('--language-switch')) {
+    const bgTarget = (await cdp('Target.getTargets')).targetInfos.find(item => item.url === origin + '/background.js');
+    const bg = await cdp('Target.attachToTarget', { targetId: bgTarget.targetId, flatten: true });
+    const grant = await cdp('Runtime.evaluate', { expression: `chrome.permissions.request({origins:['http://127.0.0.1/*']})`, userGesture: true, awaitPromise: true, returnByValue: true }, bg.sessionId);
+    if (!grant.result?.value) throw new Error('Test API permission was not granted');
+    for (const target of ['ja','auto']) {
+      await evaluate(sessionId, `document.getElementById('target').value='${target}';document.getElementById('settings').requestSubmit()`);
+      let saved;
+      for(let tries=0;tries<60;tries++) { saved=await evaluate(sessionId, `(async()=> (await chrome.storage.local.get('settings')).settings?.target)()`); if(saved===target) break; await pause(100); }
+      if(saved!==target) throw new Error('New language preference was not saved: '+target);
+    }
+  }
   if (process.argv.includes('--image-translation')) {
     await evaluate(sessionId, `(async()=>{
       const canvas=document.createElement('canvas');canvas.width=900;canvas.height=250;
@@ -120,6 +142,8 @@ try {
     const imageTarget = await cdp('Target.createTarget', { url: origin + '/image.html#image-capture-abcdef' });
     const imageSession = (await cdp('Target.attachToTarget', { targetId: imageTarget.targetId, flatten: true })).sessionId;
     for (let tries=0;tries<50;tries++) { if (await evaluate(imageSession, `!!document.getElementById('capture')?.naturalWidth`)) break; await pause(200); }
+    const imageTargets=await evaluate(imageSession, `Array.from(document.getElementById('image-target').options, option=>option.value)`);
+    if(JSON.stringify(imageTargets)!==JSON.stringify(['',...expectedTargets])) throw new Error('Image target menu differs from language catalog');
     await cdp('Network.enable', {}, imageSession);
     await cdp('Network.setBlockedURLs', { urls: ['https://*'] }, imageSession);
     const rect = await evaluate(imageSession, `(()=>{const r=document.getElementById('capture').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
@@ -138,12 +162,24 @@ try {
     for (let tries=0;tries<80;tries++) { translated=await evaluate(imageSession, `({result:document.getElementById('result').textContent,status:document.getElementById('translation-status').textContent})`); if (translated.status==='翻译完成。') break; await pause(250); }
     if (translated.result !== '你好，世界！') throw new Error('Image text translation failed: '+JSON.stringify(translated));
     if (imageAPIRequests.length!==1 || JSON.stringify(imageAPIRequests).includes('data:image')) throw new Error('Only text may be sent to translation API');
+    await evaluate(imageSession, `document.getElementById('image-target').value='en';document.getElementById('image-target').dispatchEvent(new Event('change'));document.getElementById('image-translate').click()`);
+    for (let tries=0;tries<80;tries++) { if (await evaluate(imageSession, `document.getElementById('translation-status').textContent==='翻译完成。'`)) break; await pause(250); }
+    if (imageAPIRequests.length!==2 || !imageAPIRequests[1].messages[0].content.includes('to English')) throw new Error('Image target override was not applied');
+    const imageSavedTarget = await evaluate(imageSession, `(async()=> (await chrome.storage.local.get('settings')).settings.target)()`);
+    if (imageSavedTarget!=='zh') throw new Error('Image language changed global preferences');
+    for(const [target,name] of [['ja','Japanese'],['ar','Arabic']]) {
+      const before=imageAPIRequests.length;
+      await evaluate(imageSession, `document.getElementById('image-target').value='${target}';document.getElementById('image-target').dispatchEvent(new Event('change'));document.getElementById('image-translate').click()`);
+      for(let tries=0;tries<80;tries++) { if(await evaluate(imageSession, `document.getElementById('translation-status').textContent==='翻译完成。'`)) break; await pause(100); }
+      if(imageAPIRequests.length!==before+1 || !imageAPIRequests.at(-1).messages[0].content.includes('to '+name)) throw new Error('New image target was not applied: '+target);
+    }
+    if(await evaluate(imageSession, `getComputedStyle(document.getElementById('result')).direction`) !== 'rtl') throw new Error('Arabic fixture must render right to left');
     await cdp('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:false},imageSession);
     if (await evaluate(imageSession, `document.documentElement.scrollWidth>innerWidth`)) throw new Error('Image page overflows at 360px');
     await cdp('Page.enable',{},imageSession);
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true},imageSession);
     await fs.writeFile('tests/image-ui.png',Buffer.from(screenshot.data,'base64'));
-    evidence.push({type:'real-local-image-ocr',ocr:ocr.text,translation:translated.result,remoteOCRBlocked:true,onlyTextSent:true,sessionScreenshotRemoved:true,mobileWidth:360});
+    evidence.push({type:'real-local-image-ocr',ocr:ocr.text,translation:translated.result,remoteOCRBlocked:true,onlyTextSent:true,sessionScreenshotRemoved:true,mobileWidth:360,temporaryLanguageSwitch:true,globalTargetUnchanged:true,allLanguageOptions:true,newTargets:['ja','ar']});
     console.log('IMAGE_TRANSLATION',JSON.stringify(evidence.at(-1)));
   }
   console.log('FIRST_USE', first);
@@ -209,6 +245,7 @@ try {
     }
     if (!productionStatus.includes('首次使用') || !productionStatus.includes('翻译中断')) throw new Error('Production page command did not expose real uncached-model error: ' + productionStatus);
     if (await evaluate(pageSession, `document.querySelectorAll('[data-local-page-translation]').length`)) throw new Error('Uncached production engine inserted fabricated text');
+    await evaluate(pageSession, await fs.readFile('languages.js', 'utf8'));
     await evaluate(pageSession, await fs.readFile('page-translator.js', 'utf8'));
     const workflow = await evaluate(pageSession, `(async () => {
       // Controlled DOM/scheduling fixtures only. These outputs are not model translations.
@@ -238,6 +275,17 @@ try {
       if (!document.getElementById('one').querySelector('strong') || !document.getElementById('one').querySelector('[data-local-page-translation]')) throw new Error('Inline original was not preserved');
       const firstCount = calls.length; await controller.start();
       if (calls.length !== firstCount) throw new Error('Finished paragraphs were translated again');
+      const targetSelect=panelRoot.getElementById('page-target');
+      const expected=${JSON.stringify(['',...TARGET_LANGUAGES.map(language=>language.code)])};
+      if(JSON.stringify(Array.from(targetSelect.options,option=>option.value))!==JSON.stringify(expected)) throw new Error('Page target menu differs from language catalog');
+      targetSelect.value='en';targetSelect.dispatchEvent(new Event('change'));
+      await controller.start();
+      if(calls.length!==firstCount*2 || calls.slice(firstCount).some(call=>call.translationTarget!=='en' || call.settingsSnapshot.target!=='auto')) throw new Error('Page language change did not retranslate completed paragraphs with isolated target');
+      const englishCount=calls.length;await controller.start();
+      if(calls.length!==englishCount) throw new Error('Same-language continuation repeated finished paragraphs');
+      targetSelect.value='ja';targetSelect.dispatchEvent(new Event('change'));await controller.start();
+      if(calls.length!==firstCount*3 || calls.slice(englishCount).some(call=>call.translationTarget!=='ja')) throw new Error('Japanese page target was not used for every paragraph');
+      targetSelect.value='';targetSelect.dispatchEvent(new Event('change'));
       controller.restore();
       if (fixture.innerHTML !== before) throw new Error('Restore changed original DOM');
       document.getElementById('counter').click(); if (clicks!==1) throw new Error('Restore lost page event listeners');
@@ -247,13 +295,18 @@ try {
       controller.restore();
       holdNext=true; const stopping=controller.start();
       while(!held) await new Promise(resolve=>setTimeout(resolve,5));
+      if(!targetSelect.disabled) throw new Error('Language control must be disabled during a page batch');
       if(!panelRoot.getElementById('page-status').textContent.includes('正在加载模型（40%）')) throw new Error('Loading progress was hidden behind 0/n');
       heldProgress({phase:'translating',partial:'[UI fixture partial, not inference]'});
       if(!panelRoot.getElementById('page-status').textContent.includes('已生成') || !document.querySelector('[data-local-page-translation]').textContent.includes('UI fixture partial')) throw new Error('Streaming generation was not shown before segment completion');
       controller.restore(); await stopping;
+      if(targetSelect.disabled) throw new Error('Page language control stayed disabled after cancellation');
       if (document.querySelector('[data-local-page-translation]')) throw new Error('Cancelled task inserted a late translation');
       mode='api'; const beforeAPI=calls.length; await controller.start();
       if (calls.length!==beforeAPI) throw new Error('API page text sent before explicit confirmation');
+      targetSelect.value='zh';targetSelect.dispatchEvent(new Event('change'));
+      await controller.start();
+      if(calls.length!==beforeAPI) throw new Error('Language change bypassed API confirmation');
       if(panelRoot.getElementById('page-start').getAttribute('aria-label')!=='确认使用 API 翻译本页' || !panelRoot.getElementById('page-start').querySelector('svg')) throw new Error('API confirmation lost its label or icon');
       await controller.start();
       if (calls.length===beforeAPI) throw new Error('Confirmed API batch did not proceed');
@@ -270,13 +323,16 @@ try {
       await controller.start();
       if(!panelRoot.querySelector('.panel').getClientRects().length) throw new Error('Panel did not reopen after cancellation');
       controller.restore(); close.click();
-      return {type:'whole-page-explicit-dom-fixtures-not-inference',segments:firstCount,maxInFlight,excludesSensitiveInputs:true,inlineDOMPreserved:true,restore:true,eventListenersPreserved:true,continueSkipsDone:true,dynamicContent:true,cancelRejectsLateResults:true,apiRequiresConfirmation:true,loadingProgressVisible:true,streamingVisibleBeforeCompletion:true,closeActuallyHides:true,closeDuringTranslation:true,reopenAfterClose:true};
+      return {type:'whole-page-explicit-dom-fixtures-not-inference',segments:firstCount,maxInFlight,excludesSensitiveInputs:true,inlineDOMPreserved:true,restore:true,eventListenersPreserved:true,continueSkipsDone:true,dynamicContent:true,cancelRejectsLateResults:true,apiRequiresConfirmation:true,loadingProgressVisible:true,streamingVisibleBeforeCompletion:true,closeActuallyHides:true,closeDuringTranslation:true,reopenAfterClose:true,temporaryLanguageSwitch:true,languageChangeRetranslates:true,languageChangeRequiresAPIConfirmation:true};
     })()`);
     evidence.push({ type: 'production-whole-page-uncached-error', status: productionStatus }, workflow);
     console.log('WHOLE_PAGE', JSON.stringify(evidence));
   }
   if (process.argv.includes('--selection-popup')) {
-    const page = await cdp('Target.createTarget', { url: `http://127.0.0.1:${server.address().port}/` });
+    if (process.argv.includes('--language-switch')) {
+      await evaluate(sessionId, `chrome.storage.local.set({settings:{mode:'api',engine:'webllm',target:'auto',endpoint:'http://127.0.0.1:${server.address().port}/image-api',apiModel:'fixture',apiKey:''}})`);
+    }
+    const page = await cdp('Target.createTarget', { url: `http://127.0.0.1:${server.address().port}/selection` });
     const attached = await cdp('Target.attachToTarget', { targetId: page.targetId, flatten: true });
     const pageSession = attached.sessionId;
     await pause(1000);
@@ -318,6 +374,25 @@ try {
     const opened = await popupState();
     if (opened.hidden) throw new Error('Popup closed after real mouse click: ' + JSON.stringify(opened));
     if (!opened.icons || opened.iconCount !== 5 || !opened.closeTopRight) throw new Error('Icon controls/close placement failed: '+JSON.stringify(opened));
+    if (process.argv.includes('--language-switch')) {
+      const selector=await popupNode('selection-target');
+      const selectorObject=await cdp('DOM.resolveNode',{nodeId:selector.nodeId},pageSession);
+      const selectorOptions=await cdp('Runtime.callFunctionOn',{objectId:selectorObject.object.objectId,functionDeclaration:'function(){return Array.from(this.options,option=>option.value)}',returnByValue:true},pageSession);
+      if(JSON.stringify(selectorOptions.result.value)!==JSON.stringify(['',...expectedTargets])) throw new Error('Selection target menu differs from language catalog');
+      for (const [target, language] of [['en','English'], ['zh','简体中文'], ['ja','Japanese'], ['ko','Korean'], ['fr','French'], ['ru','Russian'], ['ar','Arabic'], ['zh-TW','Traditional Chinese']]) {
+        const node=await popupNode('selection-target');
+        const object=await cdp('DOM.resolveNode',{nodeId:node.nodeId},pageSession);
+        await cdp('Runtime.callFunctionOn',{objectId:object.object.objectId,functionDeclaration:`function(){this.value='${target}';this.dispatchEvent(new Event('change'));}`},pageSession);
+        for(let tries=0;tries<60;tries++) { if(imageAPIRequests.at(-1)?.messages[0].content.includes('to '+language)) break; await pause(100); }
+        if(!imageAPIRequests.at(-1)?.messages[0].content.includes('to '+language)) throw new Error('Selection target override was not applied: '+target);
+        await pause(200);
+      }
+      const savedTarget=await evaluate(sessionId, `(async()=> (await chrome.storage.local.get('settings')).settings.target)()`);
+      if(savedTarget!=='auto') throw new Error('Selection language changed global preferences');
+      await evaluate(sessionId, `document.getElementById('history-refresh').click()`);await pause(300);
+      if(!await evaluate(sessionId, `Array.from(document.querySelectorAll('.history-meta'),node=>node.textContent).some(text=>text.includes('日语'))`)) throw new Error('Japanese history was not retained or labeled correctly');
+      evidence.push({type:'selection-language-with-test-api-not-inference',targets:['en','zh','ja','ko','fr','ru','ar','zh-TW'],globalTargetUnchanged:true,allLanguageOptions:true,japaneseHistoryLabel:true});
+    }
     await realClick(null, '重试');
     if ((await popupState()).hidden) throw new Error('Retry closed the popup');
     await realClick(null, '取消');

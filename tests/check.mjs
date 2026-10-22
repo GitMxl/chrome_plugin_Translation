@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { DEFAULTS, MAX_INPUT, MODEL_BASE, TF_BASE, TF_CACHE, messagesFor, targetLanguage, validateSettings, validateText } from '../shared.js';
+import { DEFAULTS, MAX_INPUT, MODEL_BASE, TF_BASE, TF_CACHE, messagesFor, targetLanguage, validateSettings, validateText, TARGET_LANGUAGES, languageLabel, isTargetLanguage } from '../shared.js';
 import { detectDeviceSupport } from '../device-support.js';
 import './device-support.mjs';
 import './history-store.mjs';
@@ -21,6 +21,17 @@ assert.equal(targetLanguage('Hello, world!'), '简体中文');
 assert.equal(targetLanguage('你好，世界！'), 'English');
 assert.equal(targetLanguage('你好', 'zh'), '简体中文');
 assert.equal(targetLanguage('hello', 'en'), 'English');
+for (const language of TARGET_LANGUAGES) {
+  assert.equal(validateSettings({ target: language.code }).target, language.code);
+  assert.equal(isTargetLanguage(language.code), true);
+  if (language.code === 'auto') continue;
+  assert.equal(targetLanguage('Hello', language.code), language.name);
+  assert.equal(languageLabel(language.name), language.label);
+  assert.ok(messagesFor('Hello', language.code)[0].content.includes(`to ${language.name}.`));
+}
+assert.equal(new Set(TARGET_LANGUAGES.map(language => language.code)).size, TARGET_LANGUAGES.length);
+assert.throws(() => validateSettings({ target: 'invalid' }));
+assert.throws(() => targetLanguage('Hello', 'invalid'));
 assert.throws(() => validateText(' '));
 assert.throws(() => validateText('字'.repeat(MAX_INPUT + 1)));
 assert.equal(validateText('a'.repeat(MAX_INPUT)).length, MAX_INPUT);
@@ -35,10 +46,10 @@ for (const endpoint of ['http://example.com/v1/chat/completions', 'javascript:al
 assert.equal(validateSettings({ mode: 'api', endpoint: 'http://localhost:8000/v1/chat/completions', apiModel: 'test' }).mode, 'api');
 const manifest = JSON.parse(await fs.readFile(new URL('../manifest.json', import.meta.url)));
 assert.equal(manifest.manifest_version, 3);
-assert.deepEqual(manifest.content_scripts[0].js, ['page-translator.js', 'content.js']);
+assert.deepEqual(manifest.content_scripts[0].js, ['languages.js', 'page-translator.js', 'content.js']);
 assert.match(manifest.content_security_policy.extension_pages, /script-src 'self' 'wasm-unsafe-eval';/);
 assert.doesNotMatch(manifest.content_security_policy.extension_pages, /unsafe-inline|https:[^;]*script/);
-for (const file of ['background.js', 'image.js', 'image-region.js', 'page-translator.js', 'history-store.js', 'shared.js', 'device-support.js', 'content.js', 'offscreen.js', 'engine-worker.js', 'transformers-engine.js', 'options.js', 'vendor/webllm.js', 'vendor/transformers/transformers.min.js']) {
+for (const file of ['languages.js', 'background.js', 'image.js', 'image-region.js', 'page-translator.js', 'history-store.js', 'shared.js', 'device-support.js', 'content.js', 'offscreen.js', 'engine-worker.js', 'transformers-engine.js', 'options.js', 'vendor/webllm.js', 'vendor/transformers/transformers.min.js']) {
   execFileSync(process.execPath, ['--check', file], { cwd: new URL('..', import.meta.url), stdio: 'pipe' });
 }
 assert.equal(WebAssembly.validate(await fs.readFile(new URL('../vendor/qwen2-0.5b-q4f32.wasm', import.meta.url))), true);

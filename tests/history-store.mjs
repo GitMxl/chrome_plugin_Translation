@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHistoryStore, HISTORY_LIMIT } from '../history-store.js';
+import { TARGET_LANGUAGES } from '../shared.js';
 const saved = {};
 const storage = { async get() { return JSON.parse(JSON.stringify(saved)); }, async set(value) { Object.assign(saved, value); } };
 let counter = 0;
@@ -32,4 +33,8 @@ assert.equal(bounded.items.at(-1).source, 'Entry 1');
 await Promise.all([history.add(record), history.clear()]);
 assert.equal((await history.list()).total, 0, 'clear must follow earlier pending writes');
 assert.equal((await history.list()).enabled, true);
+for (const language of TARGET_LANGUAGES.filter(language => language.code !== 'auto')) await history.add({ ...record, target: language.name });
+assert.equal((await history.list()).total, TARGET_LANGUAGES.length - 1);
+await assert.rejects(history.add({ ...record, target: 'Unrecognized language' }));
+await history.clear();
 console.log('PASS: local history concurrency, deduplication, bounds, search, deletion, clear, opt-out, invalid input recovery and secret exclusion.');
