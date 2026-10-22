@@ -9,7 +9,14 @@ const chrome = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Applic
 // Fresh profiles avoid Chromium blocking command-line-installed extensions after restart.
 const profile = path.join(cwd, `.browser-test-profile-${Date.now()}`);
 const evidence = [];
+const imageAPIRequests = [];
 const server = http.createServer((request, response) => {
+  if (request.url === '/image-api') {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => { imageAPIRequests.push(JSON.parse(body)); response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '你好，世界！' }, finish_reason: 'stop' }] })); });
+    return;
+  }
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   if (process.argv.includes('--page-translation')) {
     response.end('<!doctype html><html lang="en"><title>Whole-page test fixture</title><main id="fixture"><h1 id="heading">Page fixture heading</h1><p id="one">Hello <strong>world</strong>!</p><p id="two"><span>Another</span> <em>paragraph.</em></p><p id="long">' + 'Long sentence. '.repeat(90) + '</p><form><label>Private form text<input value="Private input"></label></form><pre>Private code sample</pre><div style="display:none">Private hidden text</div><p contenteditable="true">Private editable text</p><p>123456</p><button id="counter">Click counter</button><div id="dynamic"></div></main></html>');
@@ -98,6 +105,47 @@ try {
   await pause(1200);
   const first = await evaluate(sessionId, `document.getElementById('message').textContent`);
   if (!/首次使用|WebGPU|兼容/.test(first) && status.cache !== '完整缓存，可离线使用') throw new Error('Expected consent or unsupported-device message: ' + first);
+  if (process.argv.includes('--image-translation')) {
+    await evaluate(sessionId, `(async()=>{
+      const canvas=document.createElement('canvas');canvas.width=900;canvas.height=250;
+      const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,900,250);ctx.fillStyle='black';ctx.font='52px Arial';ctx.fillText('Hello world',40,90);ctx.font='48px Microsoft YaHei';ctx.fillText('图片文字翻译',40,180);
+      await chrome.storage.session.set({'image-capture-abcdef':{data:canvas.toDataURL(),created:Date.now()}});
+      await chrome.storage.local.set({settings:{mode:'api',engine:'webllm',target:'zh',endpoint:'http://127.0.0.1:${server.address().port}/image-api',apiModel:'fixture',apiKey:''}});
+    })()`);
+    // Permission is provisioned only in this isolated test profile.
+    const bgTarget = (await cdp('Target.getTargets')).targetInfos.find(item => item.url === origin + '/background.js');
+    const bg = await cdp('Target.attachToTarget', { targetId: bgTarget.targetId, flatten: true });
+    const grant = await cdp('Runtime.evaluate', { expression: `chrome.permissions.request({origins:['http://127.0.0.1/*']})`, userGesture: true, awaitPromise: true, returnByValue: true }, bg.sessionId);
+    if (!grant.result?.value) throw new Error('Test API permission was not granted: '+JSON.stringify(grant));
+    const imageTarget = await cdp('Target.createTarget', { url: origin + '/image.html#image-capture-abcdef' });
+    const imageSession = (await cdp('Target.attachToTarget', { targetId: imageTarget.targetId, flatten: true })).sessionId;
+    for (let tries=0;tries<50;tries++) { if (await evaluate(imageSession, `!!document.getElementById('capture')?.naturalWidth`)) break; await pause(200); }
+    await cdp('Network.enable', {}, imageSession);
+    await cdp('Network.setBlockedURLs', { urls: ['https://*'] }, imageSession);
+    const rect = await evaluate(imageSession, `(()=>{const r=document.getElementById('capture').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
+    for (const [type,x,y] of [['mousePressed',rect.x+10,rect.y+10],['mouseMoved',rect.x+rect.width-10,rect.y+rect.height-10],['mouseReleased',rect.x+rect.width-10,rect.y+rect.height-10]]) await cdp('Input.dispatchMouseEvent',{type,x,y,button:'left',clickCount:1},imageSession);
+    await evaluate(imageSession, `document.getElementById('recognize').click()`);
+    let ocr;
+    for (let tries=0;tries<120;tries++) {
+      ocr=await evaluate(imageSession, `({text:document.getElementById('ocr-text').value,status:document.getElementById('image-status').textContent,busy:document.getElementById('ocr-cancel').disabled===false})`);
+      if (!ocr.busy) break; await pause(500);
+    }
+    if (!/Hello\s+world/i.test(ocr.text) || !/图片/.test(ocr.text)) throw new Error('Real local OCR failed: '+JSON.stringify(ocr));
+    if (imageAPIRequests.length) throw new Error('OCR must not upload before translation is clicked');
+    if (await evaluate(imageSession, `(async()=>Object.keys(await chrome.storage.session.get(null)).includes('image-capture-abcdef'))()`)) throw new Error('Screenshot was not removed from session storage');
+    await evaluate(imageSession, `document.getElementById('image-translate').click()`);
+    let translated;
+    for (let tries=0;tries<80;tries++) { translated=await evaluate(imageSession, `({result:document.getElementById('result').textContent,status:document.getElementById('translation-status').textContent})`); if (translated.status==='翻译完成。') break; await pause(250); }
+    if (translated.result !== '你好，世界！') throw new Error('Image text translation failed: '+JSON.stringify(translated));
+    if (imageAPIRequests.length!==1 || JSON.stringify(imageAPIRequests).includes('data:image')) throw new Error('Only text may be sent to translation API');
+    await cdp('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:false},imageSession);
+    if (await evaluate(imageSession, `document.documentElement.scrollWidth>innerWidth`)) throw new Error('Image page overflows at 360px');
+    await cdp('Page.enable',{},imageSession);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true},imageSession);
+    await fs.writeFile('tests/image-ui.png',Buffer.from(screenshot.data,'base64'));
+    evidence.push({type:'real-local-image-ocr',ocr:ocr.text,translation:translated.result,remoteOCRBlocked:true,onlyTextSent:true,sessionScreenshotRemoved:true,mobileWidth:360});
+    console.log('IMAGE_TRANSLATION',JSON.stringify(evidence.at(-1)));
+  }
   console.log('FIRST_USE', first);
   if (process.argv.includes('--ui')) {
     const layouts = [];
@@ -470,7 +518,7 @@ try {
     }
   }
   const resultFile = process.argv.includes('--ui') ? 'tests/ui-result.json' : process.argv.includes('--input-translation') ? 'tests/input-translation-result.json' : process.argv.includes('--page-translation') ? 'tests/page-translation-result.json' : process.argv.includes('--history-ui') ? 'tests/history-ui-result.json' : process.argv.includes('--history') ? 'tests/history-browser-result.json' : process.argv.includes('--selection-popup') ? 'tests/selection-popup-result.json' : process.argv.includes('--download-button') ? 'tests/download-button-result.json' : process.argv.includes('--device-check') ? 'tests/device-browser-result.json' : process.argv.includes('--transformers') ? (process.argv.includes('--inference') ? 'tests/transformers-browser-result.json' : 'tests/transformers-smoke-result.json') : 'tests/browser-result.json';
-  await fs.writeFile(resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
+  await fs.writeFile(process.argv.includes('--image-translation') ? 'tests/image-translation-result.json' : resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
 } finally {
   server.close();
   await cdp('Browser.close').catch(() => {});

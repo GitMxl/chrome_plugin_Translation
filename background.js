@@ -3,6 +3,24 @@ import { createHistoryStore } from './history-store.js';
 const history = createHistoryStore(chrome.storage.local);
 let creating;
 const clients = new Map();
+async function captureImage(tab) {
+  if (!tab) [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!Number.isInteger(tab?.id) || !/^https?:\/\//i.test(tab.url || '')) throw new Error('请在普通 HTTP(S) 网页上使用图片区域翻译。');
+  const [before] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  if (before?.id !== tab.id || before.url !== tab.url) throw new Error('当前网页已切换，请重新截图。');
+  const data = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  const [current] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  if (current?.id !== tab.id || current.url !== tab.url) throw new Error('当前网页已切换，请重新截图。');
+  const key = `image-capture-${crypto.randomUUID()}`;
+  // Expire screenshots whose result tabs were never opened.
+  const previous = await chrome.storage.session.get(null);
+  const expired = Object.keys(previous).filter(name => name.startsWith('image-capture-') && Date.now() - previous[name].created > 300000);
+  if (expired.length) await chrome.storage.session.remove(expired);
+  await chrome.storage.session.set({ [key]: { data, created: Date.now() } });
+  try { await chrome.tabs.create({ url: chrome.runtime.getURL(`image.html#${key}`) }); }
+  catch (error) { await chrome.storage.session.remove(key); throw error; }
+  return true;
+}
 async function controlPage(command, tabId) {
   if (!Number.isInteger(tabId)) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -16,9 +34,12 @@ if (chrome.contextMenus) {
   chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.removeAll(() => {
       for (const [id, title] of [['page-start', '翻译整页（双语对照）'], ['page-stop', '停止整页翻译'], ['page-restore', '还原页面翻译']]) chrome.contextMenus.create({ id, title, contexts: ['page', 'selection', 'link'] });
+      chrome.contextMenus.create({ id: 'image-capture', title: '图片区域翻译（截图框选）', contexts: ['page', 'image', 'selection', 'link'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
     });
   });
   chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'image-capture') return captureImage(tab).catch(error =>
+      chrome.tabs.create({ url: chrome.runtime.getURL(`image.html?error=${encodeURIComponent(error.message)}`) }).catch(() => {}));
     if (['page-start', 'page-stop', 'page-restore'].includes(info.menuItemId)) controlPage(info.menuItemId.slice(5), tab?.id).catch(() => {});
   });
 }
@@ -48,6 +69,10 @@ chrome.runtime.onConnect.addListener(port => {
       }
       if (command === 'open-settings') { await chrome.runtime.openOptionsPage(); send({ id, result: true }); return; }
       if (command === 'open-history') { await chrome.tabs.create({ url: chrome.runtime.getURL('options.html#history') }); send({ id, result: true }); return; }
+      if (command === 'image-capture') {
+        if (!privileged) throw new Error('请使用扩展图标启动图片区域翻译。');
+        send({ id, result: await captureImage() }); return;
+      }
       if (['page-start', 'page-stop', 'page-restore'].includes(command)) {
         if (!privileged) throw new Error('请使用扩展图标或网页右键菜单控制整页翻译。');
         send({ id, result: await controlPage(command.slice(5)) }); return;
@@ -81,9 +106,9 @@ chrome.runtime.onConnect.addListener(port => {
       const config = { ...DEFAULTS, ...settings };
       if (['download', 'clear', 'release'].includes(command) && message.engine !== config.engine) throw new Error('推理引擎设置已变化，请重新打开设置页并确认后操作。');
       if (command === 'translate') validateText(message.text);
-      if (command === 'translate' && message.pageTranslation && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error('翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
+      if (command === 'translate' && (message.pageTranslation || message.imageTranslation) && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error(message.imageTranslation ? '翻译设置已变更，请重新截图以确认当前模式。' : '翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
       await ensureEngine();
-      await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation,
+      await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation && !message.imageTranslation,
         ...(command === 'cancel' ? { force: message.force === true, requestId: typeof message.requestId === 'string' ? message.requestId : undefined } : {}) });
     } catch (error) { send({ id, error: error.message }); }
   });

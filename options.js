@@ -86,6 +86,12 @@ for (const [id, text] of [['page-start', '整页翻译已启动，请在网页�
     finally { $(id).disabled = false; }
   });
 }
+$('image-capture').addEventListener('click', async () => {
+  $('image-capture').disabled = true;
+  try { await call('image-capture'); $('image-message').textContent = '截图已打开，请在新标签页框选需要翻译的区域。'; }
+  catch (error) { $('image-message').textContent = error.message; }
+  finally { $('image-capture').disabled = false; }
+});
 async function loadHistory() {
   const request = ++historyRequest;
   try {

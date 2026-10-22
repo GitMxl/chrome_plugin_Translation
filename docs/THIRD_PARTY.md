@@ -1,5 +1,9 @@
 # 第三方文件
 
+- `vendor/ocr/tesseract.min.js`、`worker.min.js`：官方 npm `tesseract.js@6.0.1` 的 `dist` 产物，未构建或修改。来源：https://registry.npmjs.org/tesseract.js/-/tesseract.js-6.0.1.tgz 。Apache-2.0 许可证保存在 `vendor/ocr/LICENSE-Tesseract.md`，附带依赖声明见两个 `.LICENSE.txt` 文件。
+- `vendor/ocr/tesseract-core-lstm.wasm.js` 与 `.wasm`：官方 npm `tesseract.js-core@6.0.0`，Apache-2.0，许可证见 `vendor/ocr/LICENSE-Core`。来源：https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-6.0.0.tgz 。使用本地非 SIMD LSTM 核心以兼容支持的浏览器。
+- `vendor/ocr/eng.traineddata.gz`、`chi_sim.traineddata.gz`：Tesseract 简体中文与英文整数 LSTM 数据，Apache-2.0。来源：https://github.com/naptha/tessdata/tree/gh-pages/4.0.0_best_int ，于 2026-10-22 下载并以 `vendor/checksums.json` 中的 SHA-256 固定本地内容。所有 OCR 代码与数据随扩展提供，不使用远程脚本或运行时 CDN。
+
 - `vendor/transformers/transformers.min.js`、`ort-wasm-simd-threaded.jsep.mjs`、`ort-wasm-simd-threaded.jsep.wasm`：从官方 npm 发布包 `@huggingface/transformers@3.7.3` 的 `dist` 目录直接复制，未执行构建。包含 Transformers.js（Apache-2.0）、ONNX Runtime（MIT）等上游依赖，许可证及声明保留在官方发布包、`vendor/transformers/LICENSE` 与 `vendor/transformers/LICENSE-ONNXRuntime` 中。来源：https://registry.npmjs.org/@huggingface/transformers/-/transformers-3.7.3.tgz 。
 - Transformers.js 所用 Qwen ONNX 权重：https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct ，固定提交 `22942cb7d7ba4cc81bb4673549ca4d4614469b5e`，派生自同一 Apache-2.0 Qwen 模型。模型权重按用户确认下载，不随代码预下载。
 

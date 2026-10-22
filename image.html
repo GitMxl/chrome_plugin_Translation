@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>图片区域翻译</title><link rel="stylesheet" href="options.css"><link rel="stylesheet" href="image.css"></head>
+<body><main><header><h1>图片区域翻译</h1><p>在截图中拖动框选文字，识别后可修改原文再翻译。</p></header>
+<section><p id="image-status" role="status" aria-live="polite">正在读取截图…</p><div class="actions"><button id="recognize" disabled>识别选中区域</button><button id="ocr-cancel" class="secondary" disabled>取消识别</button><button id="reselect" class="secondary" disabled>重新框选</button></div>
+<p class="fine-print">支持简体中文和英文。拖动框选，Esc 取消选区；也可聚焦截图并按 Enter 选择整张图。图片仅在本机处理。</p>
+<div id="capture-stage" hidden><img id="capture" alt="待框选的网页截图" tabindex="0" draggable="false"><div id="selection" hidden></div></div></section>
+<section><label for="ocr-text">识别原文（可修改）<textarea id="ocr-text" rows="6" placeholder="框选后点击识别"></textarea></label><p id="ocr-count">0 / 600 字符</p><p id="privacy">正在读取翻译模式…</p><div class="actions"><button id="image-translate" disabled>翻译识别文字</button><button id="translation-cancel" class="secondary" disabled>取消翻译</button><button id="copy-result" class="secondary" disabled>复制译文</button></div><p id="translation-status" role="status" aria-live="polite"></p><div id="comparison" class="bilingual-grid" hidden><div><h3>原文</h3><pre id="original"></pre></div><div><h3>译文</h3><pre id="result" aria-live="polite"></pre></div></div></section>
+</main><script src="vendor/ocr/tesseract.min.js"></script><script type="module" src="image.js"></script></body></html>
