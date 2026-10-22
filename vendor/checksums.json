@@ -1,0 +1,8 @@
+{
+  "webllm.js": "adf78adb083a12022ca09ad1612594b4c3b44f37ab9689b82671a2344f0cd606",
+  "qwen2-0.5b-q4f32.wasm": "338ab000a62274cb47fa0696aa244d4b1d73db4e6f144b429915d1cfe44d2e6a",
+  "web-llm.tgz": "f01b0a2d94d343e0a0cf5e512cb5735a8b367b91052616d0b432056f1ab7211e",
+  "transformers/transformers.min.js": "95c31f384f826f1b661799d9b9088f639d4eb9d2eb9e1ad7b3658736c6066af3",
+  "transformers/ort-wasm-simd-threaded.jsep.mjs": "08fb86ec433c78bfb032c5d84a68b8e8e5a8d81268fa39e24314179a5767a5b9",
+  "transformers/ort-wasm-simd-threaded.jsep.wasm": "c46655e8a94afc45338d4cb2b840475f88e5012d524509916e505079c00bfa39"
+}

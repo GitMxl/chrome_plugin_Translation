@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-22T02:52:10.876Z",
+  "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  "status": {
+    "device": "WebGPU 可用 · intel · 基础兼容性检测通过",
+    "cache": "未完整缓存，请确认下载或修复",
+    "error": "设置已保存。",
+    "checks": [
+      "通过 · WebAssembly：可用",
+      "通过 · WebGPU 接口：可用",
+      "通过 · GPU 适配器：可用",
+      "通过 · GPU 缓冲区基础限制：单缓冲区 2048 MiB，存储绑定 2047 MiB；基础要求分别为 256 / 128 MiB。",
+      "通过 · GPU 实际计算与回读：执行成功"
+    ],
+    "resources": "系统内存估计：32 GB（浏览器近似值）；浏览器可用存储估计：60.5 GB。",
+    "downloadEnabled": true
+  },
+  "first": "首次使用 Transformers.js 需下载约 800 MB 模型数据（建议预留 1 GB 磁盘、2 GB 以上显存）。请打开设置并确认下载。",
+  "inferenceRequested": false,
+  "evidence": [
+    {
+      "type": "device-positive-real-gpu",
+      "device": "WebGPU 可用 · intel · 基础兼容性检测通过",
+      "cache": "未完整缓存，请确认下载或修复",
+      "error": "设置已保存。",
+      "checks": [
+        "通过 · WebAssembly：可用",
+        "通过 · WebGPU 接口：可用",
+        "通过 · GPU 适配器：可用",
+        "通过 · GPU 缓冲区基础限制：单缓冲区 2048 MiB，存储绑定 2047 MiB；基础要求分别为 256 / 128 MiB。",
+        "通过 · GPU 实际计算与回读：执行成功"
+      ],
+      "resources": "系统内存估计：32 GB（浏览器近似值）；浏览器可用存储估计：60.5 GB。",
+      "downloadEnabled": true
+    },
+    {
+      "type": "device-negative-injected-no-webgpu",
+      "device": "不支持 WebGPU：请升级 Chrome，开启图形加速并重启浏览器。也可主动切换自定义 API 模式。",
+      "downloadDisabled": true,
+      "translateDisabled": true,
+      "apiRemainsAvailable": true
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "date": "2026-10-22T02:41:00.075Z",
+  "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  "status": {
+    "device": "WebGPU 可用 · intel（实际显存分配以加载结果为准）",
+    "cache": "未完整缓存，请确认下载或修复",
+    "error": "设置已保存。"
+  },
+  "first": "首次使用 Transformers.js 需下载约 800 MB 模型数据（建议预留 1 GB 磁盘、2 GB 以上显存）。请打开设置并确认下载。",
+  "inferenceRequested": false,
+  "evidence": []
+}

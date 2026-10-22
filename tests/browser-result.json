@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-22T02:05:57.969Z",
+  "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  "status": {
+    "device": "WebGPU 可用 · intel（实际显存分配以加载结果为准）",
+    "cache": "完整缓存，可离线使用",
+    "error": ""
+  },
+  "first": "正在准备翻译…",
+  "inferenceRequested": true,
+  "evidence": [
+    {
+      "type": "real-local",
+      "input": "Hello, world!",
+      "busy": false,
+      "text": "你好，世界！",
+      "message": "翻译完成。"
+    },
+    {
+      "type": "real-offline-after-release",
+      "input": "今天天气很好。",
+      "busy": false,
+      "text": "Today the weather is nice.",
+      "message": "翻译完成。"
+    },
+    {
+      "type": "real-selection-popup",
+      "input": "Hello, world!",
+      "status": "本地翻译完成 · 文字未上传",
+      "text": "你好，世界！"
+    }
+  ]
+}

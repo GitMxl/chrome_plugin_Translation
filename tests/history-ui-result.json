@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-22T03:26:43.060Z",
+  "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  "status": {
+    "device": "WebGPU 可用 · intel · 基础兼容性检测通过",
+    "cache": "未完整缓存，请确认下载或修复",
+    "error": "",
+    "checks": [
+      "通过 · WebAssembly：可用",
+      "通过 · WebGPU 接口：可用",
+      "通过 · GPU 适配器：可用",
+      "通过 · GPU 缓冲区基础限制：单缓冲区 2048 MiB，存储绑定 2047 MiB；基础要求分别为 256 / 128 MiB。",
+      "通过 · GPU 实际计算与回读：执行成功"
+    ],
+    "resources": "系统内存估计：32 GB（浏览器近似值）；浏览器可用存储估计：60.4 GB。",
+    "downloadEnabled": true
+  },
+  "first": "首次使用需下载约 300 MB 模型数据（建议预留 400 MB 磁盘、约 1.1 GB 显存）。请打开设置并确认下载。",
+  "inferenceRequested": false,
+  "evidence": [
+    {
+      "type": "real-mouse-popup-events",
+      "opened": {
+        "hidden": false,
+        "status": "首次使用需下载约 300 MB 模型数据（建议预留 400 MB 磁盘、约 1.1 GB 显存）。请打开设置并确认下载。"
+      },
+      "retryStaysOpen": true,
+      "cancelStaysOpen": true,
+      "explicitClose": true,
+      "secondSelection": true,
+      "escapeClose": true
+    },
+    {
+      "type": "history-ui-explicit-fixtures-not-inference",
+      "rendered": 2,
+      "safeText": true,
+      "search": true,
+      "delete": true,
+      "persistedOptOut": true,
+      "priorRecordsRetained": true,
+      "clear": true,
+      "trialOriginal": "Hello, world!",
+      "popupOriginal": "Good morning!",
+      "historyShortcut": true
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+# 本地划词翻译（Chrome Manifest V3）
+
+直接加载本目录即可使用。默认使用 **WebLLM + Qwen2.5-0.5B-Instruct** 在浏览器 GPU 上真实生成译文，不需要 API Key、自建后端或运行开发服务器。运行库与模型 WebAssembly 已随扩展提供，无需安装依赖、打包或构建。
+
+## 安装
+
+1. 使用支持 WebGPU、启用硬件加速的 Chrome 116 或更新版本（推荐当前稳定版）。
+2. 打开 `chrome://extensions`，开启右上角「开发者模式」。
+3. 点击「加载已解压的扩展程序」，选择包含 `manifest.json` 的本目录 `F:\study\ai\chrome_plugin_Translation`。
+4. 点击扩展图标打开设置。也可在扩展详情中点击「扩展程序选项」以完整标签页打开，首次下载建议保留该标签页。
+5. 检查设备状态，勾选下载知情确认，再点击「确认下载 / 修复缓存」。下载约 **300 MB** 模型数据；建议预留 **400 MB 磁盘、约 1.1 GB 可用显存**，实际峰值随设备而变。
+6. 等待「模型已就绪」，刷新安装前已打开的网页。选择一段文字后，点击选区旁的「译」。
+
+普通网页支持鼠标选择，以及 Shift + 方向键选择。Chrome 设置页、扩展商店、其他扩展页面、浏览器内置 PDF 阅读器等受限页面不支持注入。输入框、密码框、可编辑区域不提供划词按钮；不读取输入内容。当前仅处理顶层网页中的选择，跨域 iframe 不注入。
+
+## 使用与设置
+
+### 整页双语翻译
+
+重新加载扩展并刷新网页后，可以：
+
+1. 在普通网页上点击右键，选择「翻译整页（双语对照）」；或点击扩展图标，在「整页双语翻译」区域点击「翻译当前网页」。请使用已保存的翻译设置。
+2. 在网页右下角查看整体进度。正文逐段调用当前 WebLLM / Transformers.js / 自定义 API 模式，复用已有模型；原文保持不变，译文以纯文本插入对应段落下方。
+3. 点击「停止」保留已完整展示的段落；点击「翻译 / 继续」跳过当前设置下已完成的段落，处理剩余或新加载的正文；点击「还原页面」移除本扩展插入的译文。右键菜单和扩展弹窗也可停止、还原。
+
+每个模型请求不超过 600 个 Unicode 字符，长段落按句子 / 空白边界拆分；每轮最多 500 个请求、6 万原文字符。达到限制后可继续下一轮；单个段落超过本轮上限时跳过。扫描设有节点上限以避免超大页面长时间阻塞。处理当前已加载、未隐藏的顶层页面文字，包括屏幕下方内容；懒加载 / 动态新增内容需要再次点击继续，不自动无限监听网页变化。
+
+表单、输入框、可编辑区域、按钮、代码、脚本、隐藏内容、iframe 及扩展自身内容会跳过；不修改原文、不替换网页 HTML，保留链接、原有元素和事件。页面自行改写或删除的段落不会被过期结果覆盖。Chrome 内部页、扩展商店、内置 PDF 阅读器等受限页面仍不支持。
+
+API 整页翻译会在网页面板中再次要求确认，确认前不会发送正文。运行中修改模式 / 引擎 / 目标语言会中断后续请求，避免原本的本地任务意外上传文字。整页分段不逐条写入翻译历史，以免冲掉已有划词记录。没有完整模型缓存时只显示下载提示，不自动下载或切换远程翻译。
+
+新增的 `activeTab` 权限用于用户点击扩展后控制当前网页，`contextMenus` 用于整页翻译右键入口。以完整标签页打开设置时，请切回目标网页后点击扩展图标，或直接使用网页右键菜单。
+
+### 双语对照与翻译历史
+
+划词浮层现在同时显示「原文」和「译文」，译文生成时原文保持可见；原文与译文均作为纯文本展示，保留段落换行。设置页试译也会显示本次提交时的原文快照，修改输入框不会让正在生成的译文失去对应原文。
+
+成功翻译默认记录到当前浏览器扩展的本地历史中，包括原文、译文、时间、目标语言及所用模式 / 引擎；不保存网页地址、网页标题、API 地址或密钥，不云同步。失败、取消和生成中的部分译文不记录。最多保留 **200 条**，超出后移除最旧记录，相同原文 / 译文 / 模式的结果更新至最新位置。
+
+点击浮层「翻译历史」，或到设置页下方「翻译历史」区域，可搜索原文 / 译文、删除单条、清空全部。取消勾选「记录成功的翻译」会立即关闭后续记录，已有历史保留；清空会要求确认，且不会删除模型缓存或 API 设置。若历史写入失败，译文仍会显示，并提示历史保存失败。
+
+更新插件后，请在 `chrome://extensions` 重新加载扩展，并刷新已打开的网页，使划词浮层使用新版代码。
+
+### 双语对照与翻译历史
+
+划词浮层现在同时显示「原文」和「译文」，译文生成时原文保持可见；原文与译文均作为纯文本展示，保留段落换行。设置页试译也会显示本次提交时的原文快照，修改输入框不会让正在生成的译文失去对应原文。
+
+成功翻译默认记录到当前浏览器扩展的本地历史中，包括原文、译文、时间、目标语言及所用模式 / 引擎；不保存网页地址、网页标题、API 地址或密钥，不云同步。失败、取消和生成中的部分译文不记录。最多保留 **200 条**，超出后移除最旧记录，相同原文 / 译文 / 模式的结果更新至最新位置。
+
+点击浮层「翻译历史」，或到设置页下方「翻译历史」区域，可搜索原文 / 译文、删除单条、清空全部。取消勾选「记录成功的翻译」会立即关闭后续记录，已有历史保留；清空会要求确认，且不会删除模型缓存或 API 设置。若历史写入失败，译文仍会显示，并提示历史保存失败。
+
+更新插件后，请在 `chrome://extensions` 重新加载扩展，并刷新已打开的网页，使划词浮层使用新版代码。
+
+### 当前电脑是否支持
+
+打开设置页即自动检测，点击「重新检测当前电脑」可刷新结果。检测在实际推理 Worker 中进行，不下载模型、不上传设备信息或选中文字：验证 WebAssembly、WebGPU 接口、GPU 适配器、基础缓冲区限制，并执行一次微小 GPU 计算与结果回读。检测临时 GPU 设备和缓冲区会立即释放。
+
+页面展示逐项通过 / 未通过、显卡名称（浏览器允许时）、系统内存和可用存储近似值；不支持时给出升级浏览器、开启图形加速或检查驱动等建议，并禁用模型下载与本地试译。自定义 API 模式不受本地 GPU 检测限制。切换引擎后先保存，再按对应模型显示资源建议。
+
+「基础兼容性检测通过」表示浏览器和 GPU 能完成基础计算，不等于已确认模型全部可运行。浏览器无法准确读取真实剩余显存，缓冲区上限也不是显存容量；完整支持需以模型成功加载为准。内存 / 存储估计只作参考，不据此武断拒绝设备。
+
+相关 API 依据：[GPUAdapter.requestDevice](https://developer.mozilla.org/en-US/docs/Web/API/GPUAdapter/requestDevice)、[GPU 计算管线](https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/createComputePipelineAsync)、[浏览器内存估计](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/deviceMemory)。
+
+### 当前电脑是否支持
+
+打开设置页即自动检测，点击「重新检测当前电脑」可刷新结果。检测在实际推理 Worker 中进行，不下载模型、不上传设备信息或选中文字：验证 WebAssembly、WebGPU 接口、GPU 适配器、基础缓冲区限制，并执行一次微小 GPU 计算与结果回读。检测临时 GPU 设备和缓冲区会立即释放。
+
+页面展示逐项通过 / 未通过、显卡名称（浏览器允许时）、系统内存和可用存储近似值；不支持时给出升级浏览器、开启图形加速或检查驱动等建议，并禁用模型下载与本地试译。自定义 API 模式不受本地 GPU 检测限制。切换引擎后先保存，再按对应模型显示资源建议。
+
+「基础兼容性检测通过」表示浏览器和 GPU 能完成基础计算，不等于已确认模型全部可运行。浏览器无法准确读取真实剩余显存，缓冲区上限也不是显存容量；完整支持需以模型成功加载为准。内存 / 存储估计只作参考，不据此武断拒绝设备。
+
+相关 API 依据：[GPUAdapter.requestDevice](https://developer.mozilla.org/en-US/docs/Web/API/GPUAdapter/requestDevice)、[GPU 计算管线](https://developer.mozilla.org/en-US/docs/Web/API/GPUDevice/createComputePipelineAsync)、[浏览器内存估计](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/deviceMemory)。
+
+### Transformers.js 引擎
+
+在设置中将「本地推理引擎」改为 **Transformers.js**，点击「保存设置」，再勾选下载确认并下载。WebLLM 仍是默认引擎，自定义 API 模式保持可选。两个本地引擎使用独立缓存，切换后会释放旧模型，在下次操作时加载所选模型；缓存清理只删除当前所选引擎的数据。
+
+Transformers.js 使用 Qwen2.5-0.5B-Instruct 的 **ONNX q4** 权重，通过 ONNX Runtime Web 的 WebGPU 后端真实推理。权重文件为 786,156,820 字节，加分词器等约 **800 MB**；建议预留 1 GB 磁盘、2 GB 以上显存，实际峰值依设备而定。该格式比现有 WebLLM 权重大，适合需要 Transformers.js / ONNX 路径的设备；模型能力仍为同一个 0.5B 指令模型。当前两个引擎都要求 WebGPU，不支持时明确提示。
+
+Transformers.js 固定版本 **3.7.3**，ONNX 模型固定提交 `22942cb7d7ba4cc81bb4673549ca4d4614469b5e`。运行 JS、ORT 加载模块及 WASM 均随扩展提供，不从 CDN 加载可执行代码；关闭 ORT 代理 Worker 和多线程 WASM，继续使用现有离屏页面下的专用 Worker。下载、进度、离线加载、实例复用、流式译文、取消、资源释放及输入限制共用现有交互。
+
+官方依据：[Transformers.js 浏览器扩展示例](https://huggingface.co/docs/transformers.js/v3.0.0/tutorials/browser-extension)、[WebGPU](https://huggingface.co/docs/transformers.js/guides/webgpu)、[自定义运行环境](https://huggingface.co/docs/transformers.js/custom_usage)、[ONNX 模型仓库](https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct)。
+
+### Transformers.js 引擎
+
+在设置中将「本地推理引擎」改为 **Transformers.js**，点击「保存设置」，再勾选下载确认并下载。WebLLM 仍是默认引擎，自定义 API 模式保持可选。两个本地引擎使用独立缓存，切换后会释放旧模型，在下次操作时加载所选模型；缓存清理只删除当前所选引擎的数据。
+
+Transformers.js 使用 Qwen2.5-0.5B-Instruct 的 **ONNX q4** 权重，通过 ONNX Runtime Web 的 WebGPU 后端真实推理。权重文件为 786,156,820 字节，加分词器等约 **800 MB**；建议预留 1 GB 磁盘、2 GB 以上显存，实际峰值依设备而定。该格式比现有 WebLLM 权重大，适合需要 Transformers.js / ONNX 路径的设备；模型能力仍为同一个 0.5B 指令模型。当前两个引擎都要求 WebGPU，不支持时明确提示。
+
+Transformers.js 固定版本 **3.7.3**，ONNX 模型固定提交 `22942cb7d7ba4cc81bb4673549ca4d4614469b5e`。运行 JS、ORT 加载模块及 WASM 均随扩展提供，不从 CDN 加载可执行代码；关闭 ORT 代理 Worker 和多线程 WASM，继续使用现有离屏页面下的专用 Worker。下载、进度、离线加载、实例复用、流式译文、取消、资源释放及输入限制共用现有交互。
+
+官方依据：[Transformers.js 浏览器扩展示例](https://huggingface.co/docs/transformers.js/v3.0.0/tutorials/browser-extension)、[WebGPU](https://huggingface.co/docs/transformers.js/guides/webgpu)、[自定义运行环境](https://huggingface.co/docs/transformers.js/custom_usage)、[ONNX 模型仓库](https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct)。
+
+- 默认本地模式：选择文字只在本机处理，不上传。首次未下载时，翻译浮层提示打开设置，不会自动下载。
+- 自动中英互译：主要为中文的文本翻译为英文；其他文本默认翻译为简体中文。混合文本使用字符比例启发式判断，可在设置中明确选择中文或英文。模型本身理解源语言，不依赖远程语言检测。
+- 输入上限为 **600 个 Unicode 字符**，适合单词、句子和短段落。超出时提示缩短选区，不会静默截断。生成达到输出上限也会报错。
+- 浮层和设置试译区显示准备、下载、加载、生成、错误状态；生成中逐步显示译文。失败后可点击「重试」。浮层内容以纯文本呈现，保留换行和 Markdown 源格式，不执行 HTML。
+- 多次翻译复用同一个模型实例。全扩展一次处理一个翻译 / 模型管理任务，其他请求显示忙碌提示，稍后重试。取消仅作用于当前页面提交的任务；关闭页面会请求取消。
+- 点击「释放模型显存」卸载模型但保留磁盘缓存；空闲 10 分钟也会释放显存。下次使用从缓存加载。下载、加载阶段取消翻译后，正在进行的加载可能仍需结束，随后停止生成。
+- 「清理模型缓存」先释放模型，再删除此扩展当前所选引擎的模型缓存；不会删除网页缓存、其他引擎缓存、API 设置或密钥。进行中的任务请先取消并等待结束。
+- 完整缓存后可以断网翻译，包括重启浏览器后从本地重新加载。普通本地翻译路径禁止下载远程模型文件；缓存缺失时必须回设置页确认修复。损坏的缓存请先清理再下载。
+
+模型下载需要连接 Hugging Face 及其文件分发域名，部分网络环境下可能无法访问。没有远程翻译兜底：本地出错会明确提示，不会把文字自动转发到 API。
+
+## 可选自定义 API
+
+在设置中主动选择「自定义 API」，填写**完整的 OpenAI 兼容 Chat Completions 地址**、模型名和可选密钥，再保存，并允许访问对应站点。例如完整地址以 `/v1/chat/completions` 结尾。支持 HTTPS；本机服务允许 `http://localhost:端口/…` 或 `http://127.0.0.1:端口/…`。
+
+API 模式会向你配置的服务发送选中文字。密钥存储在扩展的 `chrome.storage.local`，不云同步，不向内容脚本提供；本地存储不等于加密保险箱。切回本地模式并保存后，下一次翻译恢复本地处理。服务必须兼容 `messages`、`max_tokens`、`temperature` 和非流式 Chat Completions 响应。请求超时为 120 秒，出错显示 HTTP 状态，不展示可能含敏感信息的服务原始错误内容。
+
+## 模型选择
+
+采用 `Qwen2.5-0.5B-Instruct-q4f32_1-MLC`。Qwen 模型卡包含中文、英文等多语言能力；0.5B 适合短文本和较低下载成本，复杂语境、专业术语及格式遵循能力不及较大模型。与 1.5B 相比，0.5B 降低下载与显存门槛；FP32 计算避免额外要求 `shader-f16`，权重仍为 4-bit。WebLLM 对该配置给出的显存估计为 **1060.2 MB**。实际模型分片合计约 278 MB（十进制），加上分词器 / 配置后，以约 300 MB 提前告知。
+
+模型数据固定为 Hugging Face 提交 `8e6ec5f417c7d0e1414703ef619b8a24686e3ab0`，WebLLM 固定为 **0.2.79**，对应的 `v0_2_48` 模型 WASM 已本地保存。许可证均为 **Apache-2.0**，见 [第三方依赖说明](docs/THIRD_PARTY.md)。
+
+## MV3 架构与官方兼容性依据
+
+开发前已核对以下官方资料：
+
+- [WebLLM 高级用法：Web Worker、Service Worker、Chrome Extension](https://webllm.mlc.ai/docs/user/advanced_usage.html)：官方支持扩展及 Worker；说明 Service Worker 可随时被浏览器终止。
+- [Chrome Service Worker 生命周期](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle)：空闲约 30 秒以及单次请求过长均可能终止后台，不能把模型持久性依赖于后台全局变量。
+- [Chrome offscreen API](https://developer.chrome.com/docs/extensions/reference/api/offscreen)：离屏页为本地静态 HTML，仅提供扩展 `runtime` API，支持 `WORKERS` 原因；除音频原因外没有固定存活时限，但不能保证不被浏览器或系统回收。
+- [Chrome 扩展 CSP](https://developer.chrome.com/docs/extensions/reference/manifest/content-security-policy)：MV3 页面与 Worker 使用 `script-src 'self' 'wasm-unsafe-eval'`，不允许远程脚本及普通 `unsafe-eval`。
+- [Qwen 官方模型卡](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) 与 [MLC 模型数据](https://huggingface.co/mlc-ai/Qwen2.5-0.5B-Instruct-q4f32_1-MLC)。
+
+通信路径为 `网页内容脚本 / 设置页 → 后台 Service Worker → 离屏页 → 专用模块 Worker`。后台只处理设置和短消息路由，不执行长时间推理；离屏页持有 Worker，Worker 保留唯一 MLCEngine。进度和结果通过事件返回，不让一次 `sendMessage` 悬挂整个下载过程。后台重启时重新发现已有离屏页；连接中断会提示重试，Worker 异常会重新创建。浏览器进程退出、更新扩展、系统回收或 GPU 丢失均可能释放实例，之后按缓存重新加载。
+
+所有 JavaScript、分词器运行依赖、嵌入的运行时 WASM 和模型 WASM 均本地提供。只允许用户显式下载命令联网读取固定模型地址的 JSON / 权重等数据；同时拦截 `fetch` 和 `Cache.add`，避免 Cache API 内部请求绕过下载确认。模型配置不提供远程脚本执行入口，输出只写入 `textContent`。
+
+系统提示词要求仅输出译文、保留段落和必要格式；选中文字序列化为独立用户消息中的 JSON 数据，不允许其成为系统指令。语言模型的提示词遵循能力有限，不能绝对保证不会受原文中的指令影响；它没有工具调用、页面操作、密钥读取或代码执行能力。
+
+权限：`storage` 保存用户设置，`offscreen` 创建推理环境，`unlimitedStorage` 保留大模型缓存，固定模型域名权限用于首次下载；自定义 API 的目标站点权限仅在保存 API 模式时申请。内容脚本仅在 HTTP(S) 顶层网页中监听用户选择。
+
+## 相关验证（不构建）
+
+本机相关检查、真实模型推理、离线复载及网页划词浮层均已通过。具体环境、实际译文及验证边界见 [验证记录](docs/VALIDATION.md)。
+
+```powershell
+node tests/check.mjs
+```
+
+检查语法、Manifest/CSP、真实本地 WASM 有效性、语言方向、提示词数据隔离、长度与 API 参数，以及通过受控依赖验证实例复用、并发、取消、释放、清缓存和禁止隐式下载。受控依赖仅用于单元检查，不是插件的翻译实现，也不作为真实推理结果。
+
+可选真实浏览器检查：
+
+```powershell
+node tests/browser-check.mjs
+node tests/browser-check.mjs --inference
+node tests/browser-check.mjs --inference --transformers
+node tests/browser-check.mjs --inference --transformers
+```
+
+第二条会在独立测试配置中下载实际模型并执行真实生成，再释放模型并在离线网络条件下重新加载翻译；不访问日常浏览器配置。Chrome 稳定版可能禁用命令行 `--load-extension`，这不影响在 `chrome://extensions` 手动安装；自动测试可使用 Chrome for Testing / Chromium，或通过环境变量 `CHROME_PATH` 指向兼容的 Chromium 浏览器。自动测试结果以 `tests/browser-result.json` 为准。
+
+手动验收建议：安装后未确认下载即试译；确认下载观察进度；英文、中文、恶意指令文字、600 / 601 字输入；连续翻译、跨页面并发、取消、释放；断网重启后翻译；清缓存后确认不再自行联网；主动切换 API 后检查目标站点权限及错误反馈。
