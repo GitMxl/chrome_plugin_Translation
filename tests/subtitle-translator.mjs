@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+const context = vm.createContext({});
+vm.runInContext(await fs.readFile(new URL('../subtitle-translator.js', import.meta.url), 'utf8'), context);
+const { cueText } = context.LocalSubtitleTranslation;
+assert.equal(cueText(null), '');
+assert.equal(cueText([{ text: 'Hello' }, { text: '字幕' }]), 'Hello\n字幕');
+assert.equal(cueText([{ text: '<b>Styled</b>', getCueAsHTML: () => ({ textContent: 'Styled' }) }]), 'Styled');
+assert.equal(cueText([{ text: '<img src=x onerror=alert(1)>' }]), '<img src=x onerror=alert(1)>');
+console.log('PASS: empty/overlapping subtitle cues and plain WebVTT source extraction.');

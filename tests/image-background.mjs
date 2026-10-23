@@ -8,6 +8,7 @@ let currentURL = 'https://example.test/';
 let installed, menuClick;
 const menus = [];
 const engineRequests = [];
+const pageMessages = [];
 const temporary = { 'image-capture-expired': { created: 0, data: 'old' } }, created = [];
 const runtime = { id: 'test', getURL: file => 'chrome-extension://test/' + file,
   onConnect: { addListener: listener => { connect = listener; } }, onInstalled: { addListener: listener => { installed = listener; } }, onMessage: { addListener() {} }, getContexts: async () => [{}], sendMessage: async message => { engineRequests.push(message); } };
@@ -17,6 +18,7 @@ const context = vm.createContext({ DEFAULTS, validateSettings, validateText, isT
     local: { get: async () => ({ settings: DEFAULTS }), setAccessLevel: async () => {} },
     session: { get: async () => ({ ...temporary }), set: async value => Object.assign(temporary, value), remove: async keys => { for (const key of [].concat(keys)) delete temporary[key]; } }
   }, tabs: {
+    sendMessage: async (tab, message, options) => { pageMessages.push({ tab, message, options }); return true; },
     query: async query => [{ id: query.windowId && switched ? 2 : 1, windowId: 10, url: currentURL }],
     captureVisibleTab: async (window, options) => { assert.equal(window, 10); assert.equal(options.format, 'png'); captured++; return 'data:image/png;base64,test'; },
     create: async value => { if (failOpen) throw new Error('tab failed'); created.push(value); }
@@ -64,10 +66,10 @@ assert.match(created.at(-1).url, /image\.html\?error=/);
 assert.match(decodeURIComponent(created.at(-1).url), /网页已切换/);
 assert.match((await webpage('translate', { text: 'hello', imageTranslation: true, settingsSnapshot: { ...DEFAULTS, mode: 'api' } })).error, /重新截图/);
 for (const { code: translationTarget } of TARGET_LANGUAGES) {
-  for (const surface of [{}, { pageTranslation: true }, { imageTranslation: true }]) {
+  for (const surface of [{}, { pageTranslation: true }, { imageTranslation: true }, { subtitleTranslation: true }]) {
     await webpage('translate', { text: 'hello', ...surface, settingsSnapshot: { ...DEFAULTS }, translationTarget });
     assert.equal(engineRequests.at(-1).settings.target, translationTarget);
-    assert.equal(engineRequests.at(-1).recordHistory, !surface.pageTranslation && !surface.imageTranslation);
+    assert.equal(engineRequests.at(-1).recordHistory, !surface.pageTranslation && !surface.imageTranslation && !surface.subtitleTranslation);
     assert.equal(DEFAULTS.target, 'auto', 'temporary target must never change saved/default settings');
   }
 }
@@ -79,5 +81,17 @@ for (const translationTarget of ['invalid', '', null, 1, {}]) {
   assert.equal(engineRequests.length, count);
 }
 assert.match((await webpage('translate', { text: 'hello', imageTranslation: true, settingsSnapshot: { ...DEFAULTS, mode: 'api' }, translationTarget: 'en' })).error, /重新截图/);
+assert.match((await webpage('translate', { text: 'hello', subtitleTranslation: true, settingsSnapshot: { ...DEFAULTS, mode: 'api' } })).error, /字幕翻译/);
+assert.match((await webpage('subtitle-start')).error, /扩展图标/);
+assert.equal((await settings('subtitle-start')).result, true);
+assert.equal(pageMessages.at(-1).message.target, 'subtitle-translator');
+assert.equal(pageMessages.at(-1).message.command, 'start');
+assert.equal(pageMessages.at(-1).options.frameId, 0);
+assert.ok(menus.find(menu => menu.id === 'subtitle-start').contexts.includes('video'));
+await menuClick({ menuItemId: 'subtitle-start', srcUrl: 'https://example.test/video' }, { id: 42 });
+assert.equal(pageMessages.at(-1).tab, 42);
+assert.equal(pageMessages.at(-1).message.videoURL, 'https://example.test/video');
+await menuClick({ menuItemId: 'subtitle-stop' }, { id: 42 });
+assert.equal(pageMessages.at(-1).message.command, 'stop');
 console.log('PASS: screenshot entry permission, image/page context menus, originating tab validation, visible menu errors, expiry, failed-tab cleanup and image translation mode snapshot.');
 console.log('PASS: all three translation surfaces accept validated temporary targets, preserve global preferences and retain mode snapshot protection.');

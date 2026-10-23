@@ -102,3 +102,12 @@
 - `node tests/check.mjs` 检查全部语种的设置验证、模型提示、临时目标路由、历史保存与标签；保持旧中英历史格式兼容，拒绝未知目标语言。
 - 独立 Edge 浏览器验证新增语言菜单一致、日语默认设置保存、划词的日／韩／法／俄／阿拉伯／繁体中文目标请求、日语历史标签、整页切换到日语后重译；图片 OCR 后验证日语和阿拉伯语目标。
 - 翻译结果使用受控本机 API 响应，整页翻译使用 DOM 调度测试数据。本轮不证明各语种模型质量，不新增 OCR 语言数据，不下载模型权重、打包或构建。
+
+## 字幕双语翻译（2026-10-22）
+
+- `node tests/check.mjs` 通过：新增原生字幕文本提取、字幕入口权限和右键菜单路由、目标语言传递、设置变更保护与禁止写入翻译历史的检查。
+- 本机 Edge 独立配置执行 `node tests/browser-check.mjs --subtitles` 通过。使用真实 HTML5 媒体时间轴和原生 WebVTT 轨道，验证字幕加载、双语浮层、API 发送前确认、拖动时间轴时屏蔽迟到旧结果、重复字幕缓存、无字幕间隔隐藏、格式化 cue 转纯文本及停止后的轨道模式恢复。
+- 验证日语目标传递、播放器容器全屏、停止后旧结果不重新出现、收起面板保持字幕可见、360 像素面板布局、缺少视频或字幕时不发翻译请求。截图见 `tests/subtitle-ui.png` 和 `tests/subtitle-ui-360.png`，记录见 `tests/subtitle-result.json`。
+- YouTube 字幕适配使用 `.html5-video-player` / `.ytp-caption-segment` 的本机 DOM 测试数据验证，未验收真实线上 YouTube 页面。未提供语音转录、画面字幕 OCR 或 iframe 视频支持。
+- API 返回受控测试译文，不作为本地模型速度、实时性或翻译质量证据。未下载模型、打包或构建。
+- 原生轨道机制依据：[TextTrack.mode](https://developer.mozilla.org/en-US/docs/Web/API/TextTrack/mode)、[activeCues](https://developer.mozilla.org/en-US/docs/Web/API/TextTrack/activeCues)。

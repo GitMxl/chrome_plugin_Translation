@@ -12,6 +12,20 @@ const profile = path.join(cwd, `.browser-test-profile-${Date.now()}`);
 const evidence = [];
 const imageAPIRequests = [];
 const server = http.createServer((request, response) => {
+  if (request.url === '/subtitle.wav') {
+    const samples = 8000 * 20, wav = Buffer.alloc(44 + samples, 128);
+    wav.write('RIFF',0);wav.writeUInt32LE(36+samples,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(8000,24);wav.writeUInt32LE(8000,28);wav.writeUInt16LE(1,32);wav.writeUInt16LE(8,34);wav.write('data',36);wav.writeUInt32LE(samples,40);
+    response.setHeader('Content-Type','audio/wav');response.setHeader('Accept-Ranges','bytes');
+    const range=/bytes=(\d+)-(\d*)/.exec(request.headers.range||'');
+    if(range){const start=Number(range[1]),end=range[2]?Math.min(Number(range[2]),wav.length-1):wav.length-1;response.statusCode=206;response.setHeader('Content-Range',`bytes ${start}-${end}/${wav.length}`);response.setHeader('Content-Length',end-start+1);response.end(wav.subarray(start,end+1));}
+    else{response.setHeader('Content-Length',wav.length);response.end(wav);}return;
+  }
+  if (request.url === '/subtitle.vtt') {
+    response.setHeader('Content-Type','text/vtt; charset=utf-8');response.end('WEBVTT\n\n00:00.000 --> 00:03.000\nHello subtitle.\n\n00:04.000 --> 00:06.000\nSecond subtitle.\n\n00:07.000 --> 00:09.000\nHello subtitle.\n\n00:10.000 --> 00:13.000\n<b>Styled subtitle.</b>\n');return;
+  }
+  if (request.url === '/subtitles') {
+    response.setHeader('Content-Type','text/html; charset=utf-8');response.end('<!doctype html><html><meta charset="utf-8"><title>Subtitle test fixture</title><style>body{margin:0;background:#e9f1ed}#player{width:640px;max-width:100%;background:#1d3432;margin:110px auto 0}video{display:block;width:100%;height:360px}#player:fullscreen{width:100%;margin:0;display:flex;align-items:center;justify-content:center}#player:fullscreen video{height:100vh}</style><main id="player"><video id="subtitle-video-fixture" controls src="/subtitle.wav"><track id="native-track" kind="subtitles" label="English" srclang="en" src="/subtitle.vtt"></video></main></html>');return;
+  }
   if (request.url === '/image-api') {
     let body = '';
     request.on('data', chunk => { body += chunk; });
@@ -19,8 +33,10 @@ const server = http.createServer((request, response) => {
       const payload = JSON.parse(body); imageAPIRequests.push(payload);
       const instruction = payload.messages[0].content;
       // Fixed fixtures verify routing/rendering; these are not model translations.
-      const content = instruction.includes('to Arabic.') ? 'مرحبًا بالعالم!' : instruction.includes('to Japanese.') ? 'こんにちは、世界！' : instruction.includes('to English.') ? 'Hello, world!' : '你好，世界！';
-      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }));
+      const text = JSON.parse(payload.messages[1].content).source_text;
+      const content = payload.model === 'subtitle-fixture' ? (instruction.includes('to Japanese.') ? '字幕訳：' : '字幕译文：') + text : instruction.includes('to Arabic.') ? 'مرحبًا بالعالم!' : instruction.includes('to Japanese.') ? 'こんにちは、世界！' : instruction.includes('to English.') ? 'Hello, world!' : '你好，世界！';
+      const send = () => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] })); };
+      if(payload.model==='subtitle-fixture' && text==='Second subtitle.') setTimeout(send,1200); else send();
     });
     return;
   }
@@ -115,7 +131,7 @@ try {
   await pause(1200);
   const first = await evaluate(sessionId, `document.getElementById('message').textContent`);
   if (!/首次使用|WebGPU|兼容/.test(first) && status.cache !== '完整缓存，可离线使用') throw new Error('Expected consent or unsupported-device message: ' + first);
-  if (process.argv.includes('--language-switch')) {
+  if (process.argv.includes('--language-switch') || process.argv.includes('--subtitles')) {
     const bgTarget = (await cdp('Target.getTargets')).targetInfos.find(item => item.url === origin + '/background.js');
     const bg = await cdp('Target.attachToTarget', { targetId: bgTarget.targetId, flatten: true });
     const grant = await cdp('Runtime.evaluate', { expression: `chrome.permissions.request({origins:['http://127.0.0.1/*']})`, userGesture: true, awaitPromise: true, returnByValue: true }, bg.sessionId);
@@ -126,6 +142,84 @@ try {
       for(let tries=0;tries<60;tries++) { saved=await evaluate(sessionId, `(async()=> (await chrome.storage.local.get('settings')).settings?.target)()`); if(saved===target) break; await pause(100); }
       if(saved!==target) throw new Error('New language preference was not saved: '+target);
     }
+  }
+  if (process.argv.includes('--subtitles')) {
+    const page=await cdp('Target.createTarget',{url:`http://127.0.0.1:${server.address().port}/subtitles`});
+    const pageSession=(await cdp('Target.attachToTarget',{targetId:page.targetId,flatten:true})).sessionId;
+    for(let tries=0;tries<60;tries++){if(await evaluate(pageSession,`document.querySelector('video')?.readyState>=1`))break;await pause(100);}
+    await evaluate(pageSession,`document.querySelector('video').currentTime=.5`);
+    await evaluate(sessionId,`document.getElementById('subtitle-start').click()`);
+    function findSubtitle(node,id){const attrs=node.attributes||[];for(let i=0;i<attrs.length;i+=2)if(attrs[i]==='id'&&attrs[i+1]===id)return node;for(const child of [...(node.children||[]),...(node.shadowRoots||[])]){const found=findSubtitle(child,id);if(found)return found;}}
+    async function subtitleAction(id,fn='function(){this.click()}'){
+      const tree=await cdp('DOM.getDocument',{depth:-1,pierce:true},pageSession),node=findSubtitle(tree.root,id);
+      if(!node)throw new Error('Subtitle UI missing: '+id);
+      const object=await cdp('DOM.resolveNode',{nodeId:node.nodeId},pageSession);
+      const result=await cdp('Runtime.callFunctionOn',{objectId:object.object.objectId,functionDeclaration:fn,returnByValue:true,awaitPromise:true},pageSession);
+      if(result.exceptionDetails)throw new Error(JSON.stringify(result.exceptionDetails));return result.result.value;
+    }
+    const state=()=>subtitleAction('subtitle-panel','function(){const r=this.getRootNode(),get=id=>r.getElementById(id);return {status:get("subtitle-status").textContent,original:get("subtitle-original").textContent,translation:get("subtitle-translation").textContent,hidden:get("subtitle-overlay").hidden,targetDisabled:get("subtitle-target").disabled,start:get("subtitle-start").getAttribute("aria-label")}}');
+    async function waitState(test){let last;for(let tries=0;tries<100;tries++){try{last=await state();if(test(last))return last;}catch{}await pause(100);}const media=await evaluate(pageSession,`(()=>{const v=document.querySelector('video');return {time:v.currentTime,duration:v.duration,seeking:v.seeking,cues:Array.from(v.textTracks[0]?.activeCues||[],c=>c.text)}})()`);throw new Error('Subtitle state timeout: '+JSON.stringify({last,media}));}
+    await waitState(value=>value.status.includes('首次使用'));
+    if(await evaluate(pageSession,`document.querySelector('video').textTracks[0].mode`)!=='disabled')throw new Error('Subtitle track mode was not restored after model failure');
+    await evaluate(sessionId,`chrome.storage.local.set({settings:{mode:'api',engine:'webllm',target:'zh',endpoint:'http://127.0.0.1:${server.address().port}/image-api',apiModel:'subtitle-fixture',apiKey:''}})`);
+    const before=imageAPIRequests.length;
+    await subtitleAction('subtitle-start');await waitState(value=>value.start.includes('确认使用 API'));
+    await pause(500);if(imageAPIRequests.length!==before)throw new Error('Subtitle text sent before API confirmation');
+    await subtitleAction('subtitle-start');
+    const firstSubtitle=await waitState(value=>value.translation==='字幕译文：Hello subtitle.');
+    if(firstSubtitle.original!=='Hello subtitle.'||firstSubtitle.hidden||!firstSubtitle.targetDisabled)throw new Error('Native bilingual cue was not shown correctly');
+    await evaluate(pageSession,`document.querySelector('video').currentTime=4.5`);
+    for(let tries=0;tries<80;tries++){if(imageAPIRequests.some(item=>item.model==='subtitle-fixture'&&JSON.parse(item.messages[1].content).source_text==='Second subtitle.'))break;await pause(100);}
+    if(!imageAPIRequests.some(item=>item.model==='subtitle-fixture'&&JSON.parse(item.messages[1].content).source_text==='Second subtitle.'))throw new Error('Native seeking did not load the second cue');
+    const requestsAtSeek=imageAPIRequests.length;
+    await evaluate(pageSession,`document.querySelector('video').currentTime=7.5`);
+    await waitState(value=>value.translation==='字幕译文：Hello subtitle.');await pause(1500);
+    if((await state()).translation!=='字幕译文：Hello subtitle.'||imageAPIRequests.length!==requestsAtSeek)throw new Error('Seeking showed a stale cue result or missed cache');
+    await evaluate(pageSession,`document.querySelector('video').currentTime=9.5`);await waitState(value=>value.hidden&&value.original==='');
+    await evaluate(pageSession,`document.querySelector('video').currentTime=10.5`);await waitState(value=>value.original==='Styled subtitle.'&&value.translation.includes('Styled subtitle.'));
+    const history=await evaluate(sessionId,`chrome.storage.local.get('translationHistory').then(data=>data.translationHistory||[])`);
+    if(history.length)throw new Error('Subtitles filled translation history');
+    await subtitleAction('subtitle-stop');
+    if((await state()).targetDisabled||await evaluate(pageSession,`document.querySelector('video').textTracks[0].mode`)!=='disabled')throw new Error('Stopping did not restore controls / track mode');
+    await subtitleAction('subtitle-target',`function(){this.value='ja';this.dispatchEvent(new Event('change'));}`);
+    await subtitleAction('subtitle-start');await waitState(value=>value.start.includes('确认使用 API'));await subtitleAction('subtitle-start');
+    await waitState(value=>value.translation==='字幕訳：Styled subtitle.');
+    if(!imageAPIRequests.at(-1).messages[0].content.includes('to Japanese'))throw new Error('Subtitle target was not passed to inference');
+    const fullscreen=await cdp('Runtime.evaluate',{expression:`document.getElementById('player').requestFullscreen()`,userGesture:true,awaitPromise:true,returnByValue:true},pageSession);
+    if(fullscreen.exceptionDetails)throw new Error('Container fullscreen failed');
+    if(!await evaluate(pageSession,`document.fullscreenElement?.contains(document.querySelector('[data-local-translator-ui="subtitles"]'))`))throw new Error('Subtitle host did not move into fullscreen container');
+    await evaluate(pageSession,`document.exitFullscreen()`);
+    await subtitleAction('subtitle-stop');
+    await evaluate(pageSession,`document.querySelector('video').currentTime=4.5`);
+    const beforeCancel=imageAPIRequests.length;
+    await subtitleAction('subtitle-start');await waitState(value=>value.start.includes('确认使用 API'));await subtitleAction('subtitle-start');
+    for(let tries=0;tries<80&&imageAPIRequests.length===beforeCancel;tries++)await pause(100);
+    if(imageAPIRequests.length===beforeCancel)throw new Error('Cancellation fixture did not start a subtitle request');
+    await subtitleAction('subtitle-stop');await pause(1400);
+    const stopped=await state();if(!stopped.hidden||stopped.original||stopped.translation||stopped.targetDisabled)throw new Error('Late subtitle response resurfaced after stop');
+    await evaluate(pageSession,`document.getElementById('native-track').remove();document.getElementById('player').classList.add('html5-video-player');const caption=document.createElement('div');caption.className='ytp-caption-segment';caption.textContent='<img src=x onerror=alert(1)> Caption fixture';document.getElementById('player').append(caption)`);
+    await subtitleAction('subtitle-refresh');await subtitleAction('subtitle-start');await waitState(value=>value.start.includes('确认使用 API'));await subtitleAction('subtitle-start');
+    const domSubtitle=await waitState(value=>value.translation.includes('Caption fixture'));
+    if(!domSubtitle.original.startsWith('<img'))throw new Error('DOM caption source was not preserved');
+    if(await subtitleAction('subtitle-panel','function(){return !!this.getRootNode().querySelector("img")}'))throw new Error('Subtitle text was executed as markup');
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true},pageSession);await fs.writeFile('tests/subtitle-ui.png',Buffer.from(screenshot.data,'base64'));
+    await subtitleAction('subtitle-collapse');
+    if(!await subtitleAction('subtitle-controls','function(){return this.hidden}'))throw new Error('Subtitle panel did not collapse');
+    if((await state()).hidden)throw new Error('Collapsing controls hid bilingual subtitles');
+    await cdp('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:false},pageSession);
+    if(await subtitleAction('subtitle-panel','function(){const r=this.getBoundingClientRect();return r.left<0||r.right>innerWidth}'))throw new Error('Subtitle panel overflows narrow viewport');
+    const smallShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true},pageSession);await fs.writeFile('tests/subtitle-ui-360.png',Buffer.from(smallShot.data,'base64'));
+    await subtitleAction('subtitle-collapse');await subtitleAction('subtitle-stop');
+    await evaluate(pageSession,`document.getElementById('player').classList.remove('html5-video-player')`);
+    const beforeUnsupported=imageAPIRequests.length;await subtitleAction('subtitle-refresh');await subtitleAction('subtitle-start');
+    await waitState(value=>value.status.includes('没有可读取的字幕'));
+    if(imageAPIRequests.length!==beforeUnsupported)throw new Error('Missing subtitles triggered a translation request');
+    await evaluate(pageSession,`document.querySelector('video').remove()`);await subtitleAction('subtitle-refresh');await subtitleAction('subtitle-start');
+    await waitState(value=>value.status.includes('未找到当前页面的视频'));
+    await subtitleAction('subtitle-close');
+    if(!await evaluate(pageSession,`document.querySelector('[data-local-translator-ui="subtitles"]').hidden`))throw new Error('Subtitle close did not hide host');
+    evidence.push({type:'subtitles-real-native-vtt-and-dom-caption-fixtures-not-model-inference',nativeCues:true,apiConfirmation:true,seekingRejectsStaleResults:true,cacheSkipsRepeatedCue:true,gapsHideOverlay:true,webVTTFormatting:true,noHistory:true,trackModeRestored:true,target:'ja',containerFullscreen:true,domCaptionAdapter:true,safeText:true,stopRejectsLateResults:true,collapseKeepsCaptions:true,mobileWidth:360,noCaptionOrVideoNoRequests:true});
+    console.log('SUBTITLES',JSON.stringify(evidence.at(-1)));
   }
   if (process.argv.includes('--image-translation')) {
     await evaluate(sessionId, `(async()=>{
@@ -593,7 +687,7 @@ try {
     }
   }
   const resultFile = process.argv.includes('--ui') ? 'tests/ui-result.json' : process.argv.includes('--input-translation') ? 'tests/input-translation-result.json' : process.argv.includes('--page-translation') ? 'tests/page-translation-result.json' : process.argv.includes('--history-ui') ? 'tests/history-ui-result.json' : process.argv.includes('--history') ? 'tests/history-browser-result.json' : process.argv.includes('--selection-popup') ? 'tests/selection-popup-result.json' : process.argv.includes('--download-button') ? 'tests/download-button-result.json' : process.argv.includes('--device-check') ? 'tests/device-browser-result.json' : process.argv.includes('--transformers') ? (process.argv.includes('--inference') ? 'tests/transformers-browser-result.json' : 'tests/transformers-smoke-result.json') : 'tests/browser-result.json';
-  await fs.writeFile(process.argv.includes('--image-translation') ? 'tests/image-translation-result.json' : resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
+  await fs.writeFile(process.argv.includes('--subtitles') ? 'tests/subtitle-result.json' : process.argv.includes('--image-translation') ? 'tests/image-translation-result.json' : resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
 } finally {
   server.close();
   await cdp('Browser.close').catch(() => {});

@@ -30,14 +30,24 @@ async function controlPage(command, tabId) {
   try { return await chrome.tabs.sendMessage(tabId, { target: 'page-translator', command }, { frameId: 0 }); }
   catch { throw new Error('当前页面无法使用整页翻译。请切换到普通 HTTP(S) 网页；安装或更新扩展后请先刷新网页。'); }
 }
+async function controlSubtitles(command, tabId, videoURL) {
+  if (!Number.isInteger(tabId)) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); tabId = tab?.id;
+  }
+  if (!Number.isInteger(tabId)) throw new Error('请先打开包含视频的网页。');
+  try { return await chrome.tabs.sendMessage(tabId, { target: 'subtitle-translator', command, videoURL }, { frameId: 0 }); }
+  catch { throw new Error('当前页面无法使用字幕翻译。请打开视频所在的普通 HTTP(S) 网页，更新扩展后先刷新网页。'); }
+}
 if (chrome.contextMenus) {
   chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.removeAll(() => {
       for (const [id, title] of [['page-start', '翻译整页（双语对照）'], ['page-stop', '停止整页翻译'], ['page-restore', '还原页面翻译']]) chrome.contextMenus.create({ id, title, contexts: ['page', 'selection', 'link'] });
       chrome.contextMenus.create({ id: 'image-capture', title: '图片区域翻译（截图框选）', contexts: ['page', 'image', 'selection', 'link'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
+      for (const [id, title] of [['subtitle-start', '开启字幕双语翻译'], ['subtitle-stop', '停止字幕翻译']]) chrome.contextMenus.create({ id, title, contexts: ['page', 'video'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
     });
   });
   chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (['subtitle-start', 'subtitle-stop'].includes(info.menuItemId)) return controlSubtitles(info.menuItemId.slice(9), tab?.id, info.srcUrl).catch(() => {});
     if (info.menuItemId === 'image-capture') return captureImage(tab).catch(error =>
       chrome.tabs.create({ url: chrome.runtime.getURL(`image.html?error=${encodeURIComponent(error.message)}`) }).catch(() => {}));
     if (['page-start', 'page-stop', 'page-restore'].includes(info.menuItemId)) controlPage(info.menuItemId.slice(5), tab?.id).catch(() => {});
@@ -73,6 +83,10 @@ chrome.runtime.onConnect.addListener(port => {
         if (!privileged) throw new Error('请使用扩展图标启动图片区域翻译。');
         send({ id, result: await captureImage() }); return;
       }
+      if (['subtitle-start', 'subtitle-stop'].includes(command)) {
+        if (!privileged) throw new Error('请使用扩展图标或网页右键菜单控制字幕翻译。');
+        send({ id, result: await controlSubtitles(command.slice(9)) }); return;
+      }
       if (['page-start', 'page-stop', 'page-restore'].includes(command)) {
         if (!privileged) throw new Error('请使用扩展图标或网页右键菜单控制整页翻译。');
         send({ id, result: await controlPage(command.slice(5)) }); return;
@@ -106,13 +120,13 @@ chrome.runtime.onConnect.addListener(port => {
       const config = { ...DEFAULTS, ...settings };
       if (['download', 'clear', 'release'].includes(command) && message.engine !== config.engine) throw new Error('推理引擎设置已变化，请重新打开设置页并确认后操作。');
       if (command === 'translate') validateText(message.text);
-      if (command === 'translate' && (message.pageTranslation || message.imageTranslation) && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error(message.imageTranslation ? '翻译设置已变更，请重新截图以确认当前模式。' : '翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
+      if (command === 'translate' && (message.pageTranslation || message.imageTranslation || message.subtitleTranslation) && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error(message.subtitleTranslation ? '翻译设置已变更，请停止并重新开始字幕翻译，确认当前模式。' : message.imageTranslation ? '翻译设置已变更，请重新截图以确认当前模式。' : '翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
       if (command === 'translate' && message.translationTarget !== undefined) {
         if (!isTargetLanguage(message.translationTarget)) throw new Error('无效的目标语言。');
         config.target = message.translationTarget;
       }
       await ensureEngine();
-      await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation && !message.imageTranslation,
+      await chrome.runtime.sendMessage({ target: 'engine', command, owner, id, text: message.text, settings: config, recordHistory: !message.pageTranslation && !message.imageTranslation && !message.subtitleTranslation,
         ...(command === 'cancel' ? { force: message.force === true, requestId: typeof message.requestId === 'string' ? message.requestId : undefined } : {}) });
     } catch (error) { send({ id, error: error.message }); }
   });

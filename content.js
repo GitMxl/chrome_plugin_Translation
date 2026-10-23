@@ -1,6 +1,7 @@
 (() => {
   let host, root, box, original, output, status, trigger, port, active, targetSelect, selection = '', requestNumber = 0;
   const requests = new Map();
+  let subtitleTranslator;
   const pageTranslator = globalThis.LocalPageTranslation.create({
     request: (command, extra, onProgress) => {
       if (command === 'cancel') {
@@ -8,9 +9,24 @@
         return call(command, task ? { force: true, requestId: task[0] } : {});
       }
       return call(command, extra, undefined, onProgress);
-    }, selectionBusy: () => !!active
+    }, selectionBusy: () => !!active || !!subtitleTranslator?.isRunning()
+  });
+  subtitleTranslator = globalThis.LocalSubtitleTranslation.create({
+    request: (command, extra, onProgress) => {
+      if (command === 'cancel') {
+        const task = [...requests].find(([, task]) => task.subtitleTranslation);
+        return task ? call('cancel', { force: true, requestId: task[0] }) : Promise.resolve(true);
+      }
+      return call(command, extra, undefined, onProgress);
+    }, otherBusy: () => !!active || pageTranslator.isRunning()
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    if (sender.id === chrome.runtime.id && message.target === 'subtitle-translator') {
+      if (message.command === 'start') subtitleTranslator.start(message.videoURL);
+      else if (message.command === 'stop') subtitleTranslator.stop();
+      else return;
+      respond({ accepted: true }); return;
+    }
     if (sender.id !== chrome.runtime.id || message.target !== 'page-translator') return;
     if (message.command === 'start') pageTranslator.start();
     else if (message.command === 'stop') pageTranslator.stop();
@@ -51,12 +67,12 @@
     return new Promise((resolve, reject) => {
       const expire = () => {
         requests.delete(id);
-        if (extra.pageTranslation) { try { port?.postMessage({ command: 'cancel', force: true, requestId: id, id: `timeout-${++requestNumber}` }); } catch {} }
+        if (extra.pageTranslation || extra.subtitleTranslation) { try { port?.postMessage({ command: 'cancel', force: true, requestId: id, id: `timeout-${++requestNumber}` }); } catch {} }
         reject(new Error('当前段落长时间没有进展，已请求释放任务，请点击继续重试。'));
       };
-      const task = { resolve, reject, timer: null, pageTranslation: !!extra.pageTranslation,
+      const task = { resolve, reject, timer: null, pageTranslation: !!extra.pageTranslation, subtitleTranslation: !!extra.subtitleTranslation,
         onProgress: value => {
-          if (extra.pageTranslation) { clearTimeout(task.timer); task.timer = setTimeout(expire, 180000); }
+          if (extra.pageTranslation || extra.subtitleTranslation) { clearTimeout(task.timer); task.timer = setTimeout(expire, 180000); }
           onProgress?.(value);
         } };
       task.timer = setTimeout(expire, 180000);
@@ -117,6 +133,7 @@
   }
   function close() { if (!host) return; trigger.hidden = true; box.hidden = true; const wasActive = !!active; active = null; targetSelect.disabled = false; if (wasActive) call('cancel').catch(() => {}); }
   async function translate() {
+    if (subtitleTranslator.isRunning()) { status.textContent = '字幕翻译正在进行，请先停止字幕任务。'; return; }
     if (pageTranslator.isRunning()) { status.textContent = '整页翻译正在进行，请先停止整页任务。'; return; }
     if (active) { status.textContent = '请先取消当前任务，等待结束后重试。'; return; }
     const sourceText = selection;
@@ -157,5 +174,5 @@
     setTimeout(() => selected(target), 0);
   });
   document.addEventListener('keyup', event => { if (event.key === 'Escape') close(); else if (event.shiftKey && !fromOverlay(event)) selected(event.target); });
-  window.addEventListener('pagehide', () => { port?.disconnect(); });
+  window.addEventListener('pagehide', () => { subtitleTranslator.destroy(); port?.disconnect(); });
 })();

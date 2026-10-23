@@ -93,6 +93,12 @@ $('image-capture').addEventListener('click', async () => {
   catch (error) { $('image-message').textContent = error.message; }
   finally { $('image-capture').disabled = false; }
 });
+for (const id of ['subtitle-start', 'subtitle-stop']) $(id).addEventListener('click', async () => {
+  $(id).disabled = true;
+  try { await call(id); $('subtitle-message').textContent = id === 'subtitle-start' ? '已打开字幕翻译面板，请在视频网页查看；API 模式需再次确认。' : '已停止字幕翻译。'; }
+  catch (error) { $('subtitle-message').textContent = error.message; }
+  finally { $(id).disabled = false; }
+});
 async function loadHistory() {
   const request = ++historyRequest;
   try {
