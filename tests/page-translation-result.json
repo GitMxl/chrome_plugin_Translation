@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-22T10:25:41.593Z",
+  "date": "2026-10-23T06:49:30.625Z",
   "browser": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "status": {
     "device": "WebGPU 可用 · intel · 基础兼容性检测通过",
@@ -12,7 +12,7 @@
       "通过 · GPU 缓冲区基础限制：单缓冲区 2048 MiB，存储绑定 2047 MiB；基础要求分别为 256 / 128 MiB。",
       "通过 · GPU 实际计算与回读：执行成功"
     ],
-    "resources": "系统内存估计：32 GB（浏览器近似值）；浏览器可用存储估计：60.0 GB。",
+    "resources": "系统内存估计：32 GB（浏览器近似值）；浏览器可用存储估计：59.8 GB。",
     "downloadEnabled": true
   },
   "first": "首次使用需下载约 300 MB 模型数据（建议预留 400 MB 磁盘、约 1.1 GB 显存）。请打开设置并确认下载。",
@@ -24,8 +24,18 @@
     },
     {
       "type": "whole-page-explicit-dom-fixtures-not-inference",
-      "segments": 9,
+      "segments": 10,
       "maxInFlight": 1,
+      "defaultFloatingPreservesGeometry": true,
+      "hoverTranslation": true,
+      "replacementPreservesNodesAndLinks": true,
+      "replacementContinueSkipsDone": true,
+      "replacementLanguageUsesOriginal": true,
+      "replacementRestorePreservesWebsiteUpdates": true,
+      "replacementRejectsStaleResults": true,
+      "replacementCancellation": true,
+      "constrainedLayoutsSkipped": true,
+      "shadowStyleIsolation": true,
       "excludesSensitiveInputs": true,
       "inlineDOMPreserved": true,
       "restore": true,
@@ -42,37 +52,6 @@
       "temporaryLanguageSwitch": true,
       "languageChangeRetranslates": true,
       "languageChangeRequiresAPIConfirmation": true
-    },
-    {
-      "type": "selection-language-with-test-api-not-inference",
-      "targets": [
-        "en",
-        "zh",
-        "ja",
-        "ko",
-        "fr",
-        "ru",
-        "ar",
-        "zh-TW"
-      ],
-      "globalTargetUnchanged": true,
-      "allLanguageOptions": true,
-      "japaneseHistoryLabel": true
-    },
-    {
-      "type": "real-mouse-popup-events",
-      "opened": {
-        "hidden": false,
-        "status": "API 翻译完成",
-        "icons": true,
-        "iconCount": 5,
-        "closeTopRight": true
-      },
-      "retryStaysOpen": true,
-      "cancelStaysOpen": true,
-      "explicitClose": true,
-      "secondSelection": true,
-      "escapeClose": true
     }
   ]
 }

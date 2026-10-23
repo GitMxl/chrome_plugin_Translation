@@ -1,6 +1,6 @@
 (() => {
   const MAX_SEGMENTS = 500, MAX_CHARS = 60000;
-  const EXCLUDE = 'script,style,noscript,template,textarea,input,select,button,form,pre,code,svg,math,canvas,iframe,[contenteditable]:not([contenteditable="false"]),[hidden],[aria-hidden="true"],[data-local-translator-ui],[data-local-page-translation]';
+  const EXCLUDE = 'script,style,noscript,template,textarea,input,select,button,form,pre,code,svg,math,canvas,iframe,nav,header,footer,label,summary,[role="navigation"],[role="menu"],[role="menubar"],[role="toolbar"],[role="tablist"],[role="button"],[contenteditable]:not([contenteditable="false"]),[hidden],[aria-hidden="true"],[data-local-translator-ui],[data-local-page-translation]';
   const BLOCK = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,dt,dd,figcaption,div,section,article,main';
   function targetSelector(id) {
     const label = document.createElement('label'); label.className = 'target-language'; label.textContent = '目标语言 ';
@@ -17,6 +17,62 @@
     return true;
   }
   const owner = parent => parent.closest(BLOCK) || parent;
+  function layoutSafe(element) {
+    // A translation must not become an additional flex/grid item or inline control.
+    if (!['block', 'flow-root', 'list-item', 'table-cell'].includes(getComputedStyle(element).display)) return false;
+    for (let current = element; current && current !== document.body && current !== document.documentElement; current = current.parentElement) {
+      const css = getComputedStyle(current);
+      if (['absolute', 'fixed', 'sticky'].includes(css.position) || ['hidden', 'clip'].includes(css.overflowY) ||
+          css.maxHeight !== 'none' || css.whiteSpace === 'nowrap' || Number(css.webkitLineClamp) > 0) return false;
+      // Computed CSS pixels cannot distinguish height:auto from a fixed height.
+      // Typed OM preserves that distinction for stylesheet rules as well as inline styles.
+      const height = current.computedStyleMap?.().get('height');
+      if (height && height.toString() !== 'auto') return false;
+    }
+    return true;
+  }
+  const viewCleanup = new WeakMap();
+  let activeFloating;
+  function hideFloating() { activeFloating?.(); activeFloating = null; }
+  function removeTranslation(node) { if (!node) return; viewCleanup.get(node)?.(); viewCleanup.delete(node); node.remove(); }
+  function translationView(element, floating) {
+    const node = document.createElement('span'); node.setAttribute('data-local-page-translation', ''); node.setAttribute('aria-busy', 'true'); node.dir = 'auto';
+    node.style.cssText = 'all:initial!important;display:block!important;position:static!important;float:none!important;box-sizing:border-box!important;width:auto!important;min-width:0!important;max-width:100%!important;height:auto!important;margin:6px 0!important;font:inherit!important;color:inherit!important;';
+    const shadow = node.attachShadow({ mode: 'closed' });
+    const style = document.createElement('style');
+    style.textContent = 'div{box-sizing:border-box;display:block;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;border-inline-start:3px solid #5081dd;padding:6px 10px;margin:0;color:inherit;background:rgba(80,129,221,.08);font:inherit;line-height:1.6;text-align:start}';
+    const text = document.createElement('div'); text.dir = 'auto';
+    shadow.append(style, text);
+    if (floating) {
+      node.style.setProperty('display', 'none', 'important');
+      node.style.setProperty('position', 'fixed', 'important');
+      node.style.setProperty('z-index', '2147483646', 'important');
+      node.style.setProperty('width', 'min(560px, calc(100vw - 32px))', 'important');
+      style.textContent += 'div{max-height:40vh;overflow:auto;background:#fff;color:#19324c;border:1px solid #cbd6e6;border-radius:8px;box-shadow:0 4px 20px #18345230;font:14px/1.6 system-ui}';
+      const hide = () => node.style.setProperty('display', 'none', 'important');
+      const show = () => {
+        hideFloating();
+        if (!element.isConnected || !text.textContent) return;
+        const bounds = element.getBoundingClientRect();
+        node.style.setProperty('display', 'block', 'important');
+        node.style.setProperty('left', `${Math.max(16, Math.min(bounds.left, innerWidth - node.getBoundingClientRect().width - 16))}px`, 'important');
+        const height = node.getBoundingClientRect().height;
+        node.style.setProperty('top', `${Math.max(16, Math.min(bounds.bottom, innerHeight - height - 16))}px`, 'important');
+        activeFloating = hide;
+      };
+      const leave = event => { if (!node.contains(event.relatedTarget) && !element.contains(event.relatedTarget)) hide(); };
+      element.addEventListener('pointerenter', show); element.addEventListener('pointerleave', leave);
+      element.addEventListener('focusin', show); element.addEventListener('focusout', leave);
+      node.addEventListener('pointerleave', leave);
+      viewCleanup.set(node, () => {
+        hide(); if (activeFloating === hide) activeFloating = null;
+        element.removeEventListener('pointerenter', show); element.removeEventListener('pointerleave', leave);
+        element.removeEventListener('focusin', show); element.removeEventListener('focusout', leave);
+      });
+      document.documentElement.append(node);
+    } else element.append(node);
+    return { node, text };
+  }
   function splitText(text, limit = 600) {
     const chars = [...text], parts = [];
     for (let start = 0; start < chars.length;) {
@@ -38,7 +94,7 @@
     while ((node = walker.nextNode())) if (eligible(node) && owner(node.parentElement) === element) text.push(node.nodeValue);
     return text.join('').trim();
   }
-  async function collect(done, signature, cancelled) {
+  async function collect(done, signature, cancelled, floating) {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), groups = new Map();
     let node, scanned = 0, limited = false;
     while ((node = walker.nextNode())) {
@@ -49,23 +105,45 @@
       if (!groups.has(block)) groups.set(block, []);
       groups.get(block).push(node.nodeValue);
     }
-    const items = []; let chars = 0, segments = 0;
+    const items = []; let chars = 0, segments = 0, layoutSkipped = 0;
     for (const [element, texts] of groups) {
       const source = texts.join('').trim();
       if (!/[\p{L}]/u.test(source)) continue;
+      if (!floating && !layoutSafe(element)) { layoutSkipped++; continue; }
       const previous = done.get(element);
       if (previous?.source === source && previous.signature === signature && previous.node.isConnected) continue;
-      if (previous && previous.source !== source) { previous.node.remove(); done.delete(element); }
+      if (previous && previous.source !== source) { removeTranslation(previous.node); done.delete(element); }
       const parts = splitText(source, 240);
       if (segments + parts.length > MAX_SEGMENTS || chars + [...source].length > MAX_CHARS) { limited = true; continue; }
       items.push({ element, source, parts }); chars += [...source].length; segments += parts.length;
     }
-    return { items, segments, limited };
+    return { items, segments, limited, layoutSkipped };
+  }
+  async function collectReplacements(replacements, signature, cancelled) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), items = [];
+    let node, scanned = 0, segments = 0, chars = 0, limited = false;
+    while ((node = walker.nextNode())) {
+      if (++scanned % 250 === 0) { await new Promise(resolve => setTimeout(resolve, 0)); if (cancelled()) return { items: [], segments: 0 }; }
+      if (scanned > 50000) { limited = true; break; }
+      if (!eligible(node) || !/[\p{L}]/u.test(node.nodeValue)) continue;
+      const previous = replacements.get(node);
+      if (previous?.signature === signature && node.nodeValue === previous.translation) continue;
+      const original = node.nodeValue, source = original.trim(), parts = splitText(source, 240);
+      if (segments + parts.length > MAX_SEGMENTS || chars + [...source].length > MAX_CHARS) { limited = true; continue; }
+      items.push({ textNode: node, element: node.parentElement, original, source, parts });
+      segments += parts.length; chars += [...source].length;
+    }
+    return { items, segments, limited, layoutSkipped: 0 };
   }
   function create({ request, selectionBusy = () => false }) {
-    let toolbar, shadow, status, progress, startButton, stopButton, restoreButton, settingsButton, targetSelect;
+    let toolbar, shadow, status, progress, startButton, stopButton, restoreButton, settingsButton, targetSelect, viewSelect;
     let running = false, cancelled = false, apiApproval = null, runNumber = 0, pendingNode, ticker;
     const done = new Map();
+    const replacements = new Map();
+    function restoreReplacement(text, result) {
+      // Preserve newer content supplied by the website, including detached nodes.
+      if (text.isConnected && text.nodeValue === result.translation) text.nodeValue = result.original;
+    }
     function init() {
       if (toolbar) return;
       toolbar = document.createElement('div'); toolbar.setAttribute('data-local-translator-ui', 'page');
@@ -76,6 +154,16 @@
       const panel = document.createElement('section'); panel.className = 'panel'; panel.setAttribute('aria-label', '整页翻译');
       style.textContent += '.target-language{display:flex;align-items:center;gap:8px;margin:8px 0}select{min-width:0;flex:1;border:1px solid #ccd8d2;border-radius:6px;padding:6px;background:#fff;color:#19324c;font:13px system-ui}select:disabled{opacity:.6}';
       const language = targetSelector('page-target'); targetSelect = language.select;
+      const viewLabel = document.createElement('label'); viewLabel.className = 'target-language'; viewLabel.textContent = '显示方式 ';
+      viewSelect = document.createElement('select'); viewSelect.id = 'page-view';
+      for (const [value, label] of [['floating', '悬浮译文（保持页面布局）'], ['replace', '替换原文（可还原）'], ['inline', '段落下方双语（增加页面高度）']]) {
+        const option = document.createElement('option'); option.value = value; option.textContent = label; viewSelect.append(option);
+      }
+      viewLabel.append(viewSelect);
+      viewSelect.addEventListener('change', () => { if (!running) { restore(); status.textContent = '显示方式已切换，点击「翻译 / 继续」应用。'; } });
+      document.addEventListener('scroll', event => { if (!event.composedPath().some(node => node?.hasAttribute?.('data-local-page-translation'))) hideFloating(); }, true);
+      window.addEventListener('resize', hideFloating);
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') hideFloating(); });
       targetSelect.addEventListener('change', () => {
         if (running) return;
         apiApproval = null; startLabel('翻译 / 继续'); progress.value = 0;
@@ -101,7 +189,7 @@
       const closeButton = button('关闭面板', 'close', () => { panelVisible(false); stop(); }); closeButton.id = 'page-close';
       const heading = document.createElement('div'); heading.className = 'panel-heading'; heading.append(title, closeButton);
       actions.append(startButton, stopButton, restoreButton, settingsButton);
-      panel.append(heading, language.label, status, progress, actions); shadow.append(style, panel); document.documentElement.append(toolbar);
+      panel.append(heading, language.label, viewLabel, status, progress, actions); shadow.append(style, panel); document.documentElement.append(toolbar);
     }
     function panelVisible(visible) {
       toolbar.hidden = !visible;
@@ -122,9 +210,11 @@
     }
     function restore() {
       stop(); runNumber++;
-      pendingNode?.remove(); pendingNode = null;
-      for (const { node } of done.values()) node.remove();
+      removeTranslation(pendingNode); pendingNode = null;
+      for (const { node } of done.values()) removeTranslation(node);
       done.clear();
+      for (const [text, result] of replacements) restoreReplacement(text, result);
+      replacements.clear();
       if (toolbar) { progress.value = 0; status.textContent = '页面已还原，原文和网页交互保持不变。'; }
     }
     async function start() {
@@ -134,11 +224,14 @@
       const run = ++runNumber;
       running = true; cancelled = false; startButton.disabled = true; stopButton.disabled = false;
       targetSelect.disabled = true;
+      viewSelect.disabled = true;
+      const floating = viewSelect.value === 'floating';
+      const replacing = viewSelect.value === 'replace';
       const translationTarget = targetSelect.value || undefined;
       const alive = () => !cancelled && run === runNumber;
       let completed = 0, total = 0, skipped = 0;
       try {
-        for (const [element, result] of done) if (!element.isConnected || !result.node.isConnected) { result.node.remove(); done.delete(element); }
+        for (const [element, result] of done) if (!element.isConnected || !result.node.isConnected) { removeTranslation(result.node); done.delete(element); }
         const settings = await request('settings');
         if (!alive()) return;
         const signature = JSON.stringify([settings.mode, settings.engine, translationTarget || settings.target, settings.glossaryRevision || '']);
@@ -150,20 +243,26 @@
         }
         apiApproval = null; startLabel('翻译 / 继续');
         for (const [element, result] of done) {
-          if (result.signature !== signature) { result.node.remove(); done.delete(element); }
+          if (result.signature !== signature) { removeTranslation(result.node); done.delete(element); }
+        }
+        for (const [text, result] of replacements) {
+          if (!text.isConnected || text.nodeValue !== result.translation || result.signature !== signature) {
+            if (result.signature !== signature) restoreReplacement(text, result);
+            replacements.delete(text);
+          }
         }
         status.textContent = '正在收集页面中的可见正文…';
-        const plan = await collect(done, signature, () => !alive());
+        const plan = replacing ? await collectReplacements(replacements, signature, () => !alive()) : await collect(done, signature, () => !alive(), floating);
         if (!alive()) return;
         total = plan.segments || 0; progress.max = total || 1; progress.value = 0;
-        if (!total) { status.textContent = plan.limited ? '本轮未找到可处理的段落，单个段落可能超过本轮上限。' : '没有新的可翻译文字。已跳过表单、代码、隐藏内容和已完成段落。'; return; }
+        if (!total) { status.textContent = plan.limited ? '本轮未找到可处理的段落，单个段落可能超过本轮上限。' : `没有新的可翻译文字。已跳过表单、代码、导航、隐藏内容和已完成段落。${plan.layoutSkipped ? `为保护布局，跳过 ${plan.layoutSkipped} 个受限区域，可使用划词翻译。` : ''}`; return; }
         for (const item of plan.items) {
           if (!alive()) break;
-          if (!item.element.isConnected || originalText(item.element) !== item.source) { skipped += item.parts.length; continue; }
+          const unchanged = () => replacing ? item.textNode.isConnected && item.textNode.nodeValue === item.original && eligible(item.textNode)
+            : item.element.isConnected && (floating || layoutSafe(item.element)) && originalText(item.element) === item.source;
+          if (!unchanged()) { skipped += item.parts.length; continue; }
           const translated = [];
-          const node = document.createElement('span'); node.setAttribute('data-local-page-translation', ''); node.setAttribute('aria-busy', 'true'); node.dir = 'auto';
-          node.style.cssText = 'display:block;white-space:pre-wrap;overflow-wrap:anywhere;border-left:3px solid #5081dd;padding:6px 10px;margin:6px 0;color:inherit;background:rgba(80,129,221,.08);font:inherit';
-          item.element.append(node); pendingNode = node;
+          const { node, text: translationText } = replacing ? { node: null, text: null } : translationView(item.element, floating); pendingNode = node;
           for (const part of item.parts) {
             if (!alive()) break;
             const started = Date.now(); let stage = settings.mode === 'api' ? '正在请求自定义 API' : '正在准备本地模型', partial = '';
@@ -173,31 +272,39 @@
             };
             renderProgress(); clearInterval(ticker); ticker = setInterval(renderProgress, 1000);
             const result = await request('translate', { text: part, pageTranslation: true, settingsSnapshot: settings, translationTarget }, update => {
-              if (!alive() || !node.isConnected) return;
+              if (!alive() || (replacing ? !unchanged() : !node.isConnected)) return;
               if (update.phase === 'loading' || update.phase === 'downloading') stage = `正在加载模型${Number.isFinite(update.progress) ? `（${Math.round(update.progress * 100)}%）` : ''}${update.text ? '：' + update.text : ''}`;
               else if (update.phase === 'translating') stage = '正在生成译文';
               else if (update.text) stage = update.text;
-              if (typeof update.partial === 'string') { partial = update.partial; node.textContent = [...translated, partial].join('\n'); }
+              if (typeof update.partial === 'string') { partial = update.partial; if (translationText) translationText.textContent = [...translated, partial].join('\n'); }
               renderProgress();
             });
             clearInterval(ticker); ticker = null;
             if (!alive()) break;
             translated.push(result); completed++; progress.value = completed;
-            node.textContent = translated.join('\n');
+            if (translationText) translationText.textContent = translated.join('\n');
           }
           if (!alive()) break;
-          if (!item.element.isConnected || originalText(item.element) !== item.source) { node.remove(); pendingNode = null; skipped += item.parts.length; continue; }
-          done.get(item.element)?.node.remove();
+          if (!unchanged()) { removeTranslation(node); pendingNode = null; skipped += item.parts.length; continue; }
+          if (replacing) {
+            const translation = item.original.match(/^\s*/u)[0] + translated.join('\n') + item.original.match(/\s*$/u)[0];
+            item.textNode.nodeValue = translation;
+            replacements.set(item.textNode, { original: item.original, translation, signature });
+            continue;
+          }
+          removeTranslation(done.get(item.element)?.node);
           node.removeAttribute('aria-busy'); pendingNode = null;
           done.set(item.element, { node, source: item.source, signature });
         }
-        if (run === runNumber) status.textContent = cancelled ? `已停止，完成 ${completed} / ${total} 段。已显示的译文保留，可继续或还原。` : `本轮完成 ${completed} / ${total} 段。${skipped ? `页面内容发生变化，跳过 ${skipped} 段，请点击继续重新收集。` : ''}${plan.limited ? '已达到本轮 500 段 / 6 万字上限，可点击继续处理剩余内容。' : '可继续处理新加载的正文，或还原页面。'}`;
+        if (run === runNumber) status.textContent = cancelled ? `已停止，完成 ${completed} / ${total} 段。已显示的译文保留，可继续或还原。` : `本轮完成 ${completed} / ${total} 段。${skipped ? `页面内容发生变化，跳过 ${skipped} 段，请点击继续重新收集。` : ''}${plan.layoutSkipped ? `为保护布局，跳过 ${plan.layoutSkipped} 个受限区域，可使用划词翻译。` : ''}${plan.limited ? '已达到本轮 500 段 / 6 万字上限，可点击继续处理剩余内容。' : '可继续处理新加载的正文，或还原页面。'}`;
       } catch (error) {
         if (run === runNumber) status.textContent = cancelled ? `已停止，完成 ${completed} / ${total} 段。` : `翻译中断（${completed} / ${total}）：${error.message} 已完成的段落保留，可点击继续重试。`;
       } finally {
-        clearInterval(ticker); ticker = null; pendingNode?.remove(); pendingNode = null;
+        clearInterval(ticker); ticker = null; removeTranslation(pendingNode); pendingNode = null;
         if (cancelled && run === runNumber) status.textContent = `已停止，完成 ${completed} / ${total} 段。已显示的译文保留，可继续或还原。`;
-        running = false; startButton.disabled = false; stopButton.disabled = true; targetSelect.disabled = false;
+        if (floating && !cancelled && completed) status.textContent += ' 悬停正文或聚焦原有链接可查看译文，页面原有位置保持不变。';
+        if (replacing && !cancelled && completed) status.textContent += ' 已直接替换文字，可点击「还原页面」恢复；译文较长时可能换行。';
+        running = false; startButton.disabled = false; stopButton.disabled = true; targetSelect.disabled = false; viewSelect.disabled = false;
       }
     }
     return { start, stop, restore, isRunning: () => running };

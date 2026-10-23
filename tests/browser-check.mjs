@@ -425,7 +425,10 @@ try {
     const workflow = await evaluate(pageSession, `(async () => {
       // Controlled DOM/scheduling fixtures only. These outputs are not model translations.
       const calls = []; let inFlight = 0, maxInFlight = 0, mode = 'local', held, heldProgress, holdNext = false, panelRoot;
-      const fixture = document.getElementById('fixture'); const before = fixture.innerHTML;
+      const fixture = document.getElementById('fixture');
+      const layoutFixture=document.createElement('section');layoutFixture.id='layout-fixture';layoutFixture.className='layout-case';
+      layoutFixture.innerHTML='<style>.layout-case span{display:inline-flex!important;position:absolute!important;width:900px!important;height:80px!important}.layout-case .fixed-height{height:36px}.layout-case .clamped{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}</style><div id="layout-flex" style="display:flex;gap:12px">Flex layout text<i>Icon</i></div><div id="layout-grid" style="display:grid;grid-template-columns:1fr 1fr">Grid layout text<b>Grid item</b></div><div id="layout-fixed" class="fixed-height"><p>Fixed height text</p></div><p id="layout-clamped" class="clamped">Clamped text</p><div id="layout-clipped" style="height:30px;overflow:hidden"><p>Clipped text</p></div><nav id="layout-nav">Navigation layout text</nav><p id="layout-normal">Normal layout text <a href="#layout-normal">original link</a></p>';
+      fixture.append(layoutFixture);const before = fixture.innerHTML;
       let clicks = 0; document.getElementById('counter').addEventListener('click',()=>clicks++);
       const request = async (command, options, onProgress) => {
         if (command === 'settings') return {mode,engine:'webllm',target:'auto'};
@@ -437,11 +440,54 @@ try {
         else { await new Promise(resolve=>setTimeout(resolve,5)); value = '[UI fixture, not model output] ' + options.text; }
         inFlight--; return value;
       };
-      const nativeAttachShadow=Element.prototype.attachShadow;
-      Element.prototype.attachShadow=function(options){const root=nativeAttachShadow.call(this,options);if(this.matches('[data-local-translator-ui="page"]'))panelRoot=root;return root};
+      const nativeAttachShadow=Element.prototype.attachShadow, translationRoots=new WeakMap();
+      Element.prototype.attachShadow=function(options){const root=nativeAttachShadow.call(this,options);if(this.matches('[data-local-translator-ui="page"]'))panelRoot=root;if(this.hasAttribute('data-local-page-translation'))translationRoots.set(this,root);return root};
       const controller = LocalPageTranslation.create({request});
+      const geometry=()=>JSON.stringify({width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,boxes:[...fixture.querySelectorAll('[id]')].map(e=>{const r=e.getBoundingClientRect();return [e.id,r.x,r.y,r.width,r.height]})});
+      const originalGeometry=geometry();
       await controller.start();
-      Element.prototype.attachShadow=nativeAttachShadow;
+      if(panelRoot.getElementById('page-view').value!=='floating' || geometry()!==originalGeometry || fixture.innerHTML!==before)throw new Error('Default floating translation changed original layout or DOM');
+      document.getElementById('one').dispatchEvent(new PointerEvent('pointerenter'));
+      const floated=[...document.querySelectorAll('[data-local-page-translation]')].find(e=>getComputedStyle(e).display!=='none');
+      if(!floated || getComputedStyle(floated).position!=='fixed' || !translationRoots.get(floated)?.querySelector('div').textContent.includes('Hello world!'))throw new Error('Floating translation did not appear on hover');
+      if(geometry()!==originalGeometry)throw new Error('Visible floating translation shifted content');
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));
+      if(getComputedStyle(floated).display!=='none')throw new Error('Floating translation did not hide on Escape');
+      document.getElementById('one').dispatchEvent(new PointerEvent('pointerenter'));
+      document.dispatchEvent(new Event('scroll'));
+      if(getComputedStyle(floated).display!=='none')throw new Error('Floating translation did not hide on scroll');
+      controller.restore();calls.length=0;
+      const viewSelect=panelRoot.getElementById('page-view');viewSelect.value='replace';
+      const originalElements=[...fixture.querySelectorAll('*')], originalStrong=document.getElementById('one').querySelector('strong'), originalStrongText=originalStrong.firstChild;
+      const originalLink=document.getElementById('layout-normal').querySelector('a'), originalHref=originalLink.getAttribute('href');let linkClicks=0;
+      originalLink.addEventListener('click',event=>{event.preventDefault();linkClicks++});
+      await controller.start();
+      if(document.querySelector('[data-local-page-translation]'))throw new Error('Replacement created an additional translation container');
+      if(originalElements.length!==fixture.querySelectorAll('*').length || originalElements.some((element,index)=>element!==fixture.querySelectorAll('*')[index]))throw new Error('Replacement rebuilt original elements');
+      if(originalStrong.firstChild!==originalStrongText || !originalStrong.textContent.includes('[UI fixture, not model output] world'))throw new Error('Replacement lost inline text node identity');
+      if(originalLink.getAttribute('href')!==originalHref || !originalLink.textContent.includes('original link'))throw new Error('Replacement changed or emptied original link');
+      if(!document.getElementById('one').firstChild.nodeValue.endsWith(' ') || document.getElementById('one').lastChild.nodeValue!=='!')throw new Error('Replacement removed surrounding whitespace or punctuation-only nodes');
+      originalLink.click();if(linkClicks!==1)throw new Error('Replacement lost link event handlers');
+      const replacedCount=calls.length;await controller.start();if(calls.length!==replacedCount)throw new Error('Replacement continued by translating its own output');
+      const replaceTarget=panelRoot.getElementById('page-target');replaceTarget.value='ja';replaceTarget.dispatchEvent(new Event('change'));await controller.start();
+      if(calls.slice(replacedCount).some(call=>call.text.includes('[UI fixture')))throw new Error('Replacement language switch translated previous translations');
+      originalLink.firstChild.nodeValue='Website newer label';controller.restore();
+      if(originalLink.textContent!=='Website newer label')throw new Error('Restore overwrote newer website content');
+      originalLink.firstChild.nodeValue='original link';
+      if(fixture.innerHTML!==before)throw new Error('Replacement restore did not recover original DOM');
+      replaceTarget.value='';replaceTarget.dispatchEvent(new Event('change'));
+      holdNext=true;const replaceRun=controller.start();while(!held)await new Promise(resolve=>setTimeout(resolve,5));
+      const headingText=document.getElementById('heading').firstChild, originalHeading=headingText.nodeValue;
+      headingText.nodeValue='New website heading';held('[stale translated heading]');held=null;await replaceRun;
+      if(headingText.nodeValue!=='New website heading')throw new Error('Late replacement overwrote a website update');
+      controller.restore();headingText.nodeValue=originalHeading;
+      holdNext=true;const cancelledReplacement=controller.start();while(!held)await new Promise(resolve=>setTimeout(resolve,5));controller.stop();await cancelledReplacement;
+      if(fixture.innerHTML!==before)throw new Error('Cancelled replacement changed original text');
+      controller.restore();calls.length=0;viewSelect.value='inline';
+      await controller.start();
+      if(calls.some(call=>/Flex layout|Grid layout|Fixed height|Clamped text|Clipped text|Navigation layout/.test(call.text)))throw new Error('Inline translation entered a constrained layout');
+      const normalHost=document.getElementById('layout-normal').querySelector('[data-local-page-translation]');
+      if(!normalHost || getComputedStyle(normalHost).position!=='static' || getComputedStyle(normalHost).display!=='block' || !translationRoots.get(normalHost).querySelector('div').textContent.includes('Normal layout'))throw new Error('Page CSS escaped translation style isolation');
       const iconButtons=[...panelRoot.querySelectorAll('.icon-button')], close=panelRoot.getElementById('page-close'), heading=panelRoot.querySelector('.panel-heading');
       if(iconButtons.length!==5 || iconButtons.some(button=>!button.querySelector('svg') || button.textContent || button.title!==button.getAttribute('aria-label'))) throw new Error('Whole-page icon controls missing labels or icons');
       if(close.parentElement!==heading || Math.abs(close.getBoundingClientRect().right-heading.getBoundingClientRect().right)>1) throw new Error('Whole-page close is not at top right');
@@ -473,7 +519,7 @@ try {
       if(!targetSelect.disabled) throw new Error('Language control must be disabled during a page batch');
       if(!panelRoot.getElementById('page-status').textContent.includes('正在加载模型（40%）')) throw new Error('Loading progress was hidden behind 0/n');
       heldProgress({phase:'translating',partial:'[UI fixture partial, not inference]'});
-      if(!panelRoot.getElementById('page-status').textContent.includes('已生成') || !document.querySelector('[data-local-page-translation]').textContent.includes('UI fixture partial')) throw new Error('Streaming generation was not shown before segment completion');
+      if(!panelRoot.getElementById('page-status').textContent.includes('已生成') || !translationRoots.get(document.querySelector('[data-local-page-translation]')).querySelector('div').textContent.includes('UI fixture partial')) throw new Error('Streaming generation was not shown before segment completion');
       controller.restore(); await stopping;
       if(targetSelect.disabled) throw new Error('Page language control stayed disabled after cancellation');
       if (document.querySelector('[data-local-page-translation]')) throw new Error('Cancelled task inserted a late translation');
@@ -498,7 +544,8 @@ try {
       await controller.start();
       if(!panelRoot.querySelector('.panel').getClientRects().length) throw new Error('Panel did not reopen after cancellation');
       controller.restore(); close.click();
-      return {type:'whole-page-explicit-dom-fixtures-not-inference',segments:firstCount,maxInFlight,excludesSensitiveInputs:true,inlineDOMPreserved:true,restore:true,eventListenersPreserved:true,continueSkipsDone:true,dynamicContent:true,cancelRejectsLateResults:true,apiRequiresConfirmation:true,loadingProgressVisible:true,streamingVisibleBeforeCompletion:true,closeActuallyHides:true,closeDuringTranslation:true,reopenAfterClose:true,temporaryLanguageSwitch:true,languageChangeRetranslates:true,languageChangeRequiresAPIConfirmation:true};
+      Element.prototype.attachShadow=nativeAttachShadow;
+      return {type:'whole-page-explicit-dom-fixtures-not-inference',segments:firstCount,maxInFlight,defaultFloatingPreservesGeometry:true,hoverTranslation:true,replacementPreservesNodesAndLinks:true,replacementContinueSkipsDone:true,replacementLanguageUsesOriginal:true,replacementRestorePreservesWebsiteUpdates:true,replacementRejectsStaleResults:true,replacementCancellation:true,constrainedLayoutsSkipped:true,shadowStyleIsolation:true,excludesSensitiveInputs:true,inlineDOMPreserved:true,restore:true,eventListenersPreserved:true,continueSkipsDone:true,dynamicContent:true,cancelRejectsLateResults:true,apiRequiresConfirmation:true,loadingProgressVisible:true,streamingVisibleBeforeCompletion:true,closeActuallyHides:true,closeDuringTranslation:true,reopenAfterClose:true,temporaryLanguageSwitch:true,languageChangeRetranslates:true,languageChangeRequiresAPIConfirmation:true};
     })()`);
     evidence.push({ type: 'production-whole-page-uncached-error', status: productionStatus }, workflow);
     console.log('WHOLE_PAGE', JSON.stringify(evidence));
