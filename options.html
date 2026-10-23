@@ -20,6 +20,13 @@
     <label>完整 Chat Completions 地址<input id="endpoint" type="url" placeholder="https://your-service.example/v1/chat/completions"></label>
     <label>模型名称<input id="apiModel" placeholder="服务提供的模型名称"></label>
     <label>API Key（服务允许时可留空）<input id="apiKey" type="password" autocomplete="off"></label></div>
+    <fieldset id="glossary-settings"><legend>自定义术语表</legend>
+      <label>术语译法的目标语言<select id="glossaryTarget"></select></label>
+      <label for="glossary">每行一条：原词 = 指定译法</label>
+      <textarea id="glossary" rows="6" maxlength="4000" spellcheck="false" placeholder="WebGPU = WebGPU&#10;large language model = 大语言模型" aria-describedby="glossary-help"></textarea>
+      <p id="glossary-help" class="fine-print">最多 50 条、共 2000 个字符，原词和译法各最多 60 字。仅对上方指定语言生效，英文不区分大小写并按词边界匹配；清空后保存即可停用。所有翻译入口共用，仅发送原文中命中的术语。术语保存在此浏览器；API 模式会把命中词对与原文一起发送给服务。模型可能未完全遵循指定译法，请核对结果。</p>
+      <p class="fine-print">修改后点击「保存设置」。整页翻译请重新开始；字幕请停止后重新开始；图片翻译请重新截图。</p>
+    </fieldset>
     <button type="submit">保存设置</button>
   </form></section>
   <section id="page-tools"><div class="section-heading"><h2>整页双语翻译</h2><span class="section-tag">保留原文</span></div><p>把网页变成双语阅读空间。原文下方逐段展示译文，进度显示在网页右下角。</p><div class="page-tip"><span aria-hidden="true">↗</span><div>在目标网页点击扩展图标后使用，或在网页右键选择「翻译整页」。</div></div><p class="fine-print">跳过表单、代码及隐藏内容；整页段落不逐条写入翻译历史。</p><div class="actions"><button id="page-start">翻译当前网页</button><button id="page-stop" class="secondary">停止整页翻译</button><button id="page-restore" class="secondary">还原页面</button></div><p id="page-message" role="status"></p></section>

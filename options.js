@@ -1,6 +1,8 @@
 import { DEFAULTS, validateSettings, validateText, MAX_INPUT, extensionRuntime, EXTENSION_CONTEXT_ERROR, populateTargets, languageLabel } from './shared.js';
 const $ = id => document.getElementById(id);
 populateTargets($('target'));
+populateTargets($('glossaryTarget'));
+$('glossaryTarget').querySelector('option[value="auto"]').remove();
 let port, serial = 0, active, savedEngine = DEFAULTS.engine;
 let capability = null, downloading = false;
 let historyRequest = 0, historySearchTimer, historyWarning = '';

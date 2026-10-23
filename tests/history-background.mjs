@@ -6,7 +6,8 @@ import { createHistoryStore } from '../history-store.js';
 let sequence = 0, onConnect, onMessage;
 const saved = {}, ports = [];
 const storage = { get: async () => JSON.parse(JSON.stringify(saved)), set: async value => Object.assign(saved, value), setAccessLevel: async () => {} };
-const runtime = { id: 'test', getURL: file => 'chrome-extension://test/' + file, onConnect: { addListener: callback => { onConnect = callback; } }, onMessage: { addListener: callback => { onMessage = callback; } }, sendMessage: async () => {}, openOptionsPage: async () => {} };
+const engineMessages = [];
+const runtime = { id: 'test', getURL: file => 'chrome-extension://test/' + file, getContexts: async () => [{}], onConnect: { addListener: callback => { onConnect = callback; } }, onMessage: { addListener: callback => { onMessage = callback; } }, sendMessage: async message => { engineMessages.push(message); }, openOptionsPage: async () => {} };
 const context = vm.createContext({ DEFAULTS, validateSettings, validateText, isTargetLanguage,
   createHistoryStore: store => createHistoryStore(store, { makeId: () => `record-${++sequence}` }),
   crypto: { randomUUID: () => `owner-${++sequence}` },
@@ -50,4 +51,21 @@ storage.set = originalSet;
 saved.settings = { ...DEFAULTS, mode: 'api' };
 const changedMode = await webpage.request('translate', { text: 'Page text', pageTranslation: true, settingsSnapshot: { mode: 'local', engine: 'webllm', target: 'auto' } });
 assert.match(changedMode.error, /设置已变更/);
+const glossarySettings = { ...DEFAULTS, glossary: 'GPU = 图形处理器' };
+assert.equal((await settings.request('save', { settings: glossarySettings })).result, true);
+const revision = saved.settings.glossaryRevision;
+assert.ok(revision);
+const publicSettings = (await webpage.request('settings')).result;
+assert.equal(publicSettings.glossaryRevision, revision);
+assert.equal(publicSettings.glossary, undefined);
+assert.equal((await webpage.request('save', { settings: glossarySettings })).result, undefined);
+await settings.request('save', { settings: glossarySettings });
+assert.equal(saved.settings.glossaryRevision, revision, 'unchanged glossary preserves cache revision');
+await webpage.request('translate', { text: 'GPU' });
+assert.equal(engineMessages.at(-1).settings.glossary, glossarySettings.glossary);
+for (const entry of ['pageTranslation', 'subtitleTranslation', 'imageTranslation']) {
+  assert.match((await webpage.request('translate', { text: 'GPU', [entry]: true, settingsSnapshot: { ...DEFAULTS } })).error, /术语表已变更/);
+}
+await settings.request('save', { settings: { ...glossarySettings, glossary: '' } });
+assert.notEqual(saved.settings.glossaryRevision, revision, 'clearing glossary invalidates old translations');
 console.log('PASS: history permissions, hash-linked settings, trusted completion persistence, opt-out and forged-message rejection.');

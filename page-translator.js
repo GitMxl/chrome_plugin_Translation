@@ -141,7 +141,7 @@
         for (const [element, result] of done) if (!element.isConnected || !result.node.isConnected) { result.node.remove(); done.delete(element); }
         const settings = await request('settings');
         if (!alive()) return;
-        const signature = JSON.stringify([settings.mode, settings.engine, translationTarget || settings.target]);
+        const signature = JSON.stringify([settings.mode, settings.engine, translationTarget || settings.target, settings.glossaryRevision || '']);
         if (settings.mode === 'api' && apiApproval !== signature) {
           apiApproval = signature;
           startLabel('确认使用 API 翻译本页');

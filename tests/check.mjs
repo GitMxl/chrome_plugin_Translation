@@ -13,6 +13,7 @@ import './runtime-context.mjs';
 import './image-region.mjs';
 import './image-background.mjs';
 import './subtitle-translator.mjs';
+import './glossary.mjs';
 
 assert.equal(DEFAULTS.mode, 'local');
 assert.equal(DEFAULTS.engine, 'webllm');
@@ -62,21 +63,21 @@ assert.doesNotMatch(library, /^import\s.+from\s+['"]https?:/m);
 
 // Test orchestration and network policy with controlled dependencies; these are not inference results.
 const source = (await fs.readFile(new URL('../engine-worker.js', import.meta.url), 'utf8')).replace(/^import .*;\r?\n/gm, '').replaceAll('import.meta.url', JSON.stringify('chrome-extension://test/engine-worker.js'));
-const outputs = [], network = [], cacheEntries = new Map();
+const outputs = [], network = [], requests = [], modelRequests = [], cacheEntries = new Map();
 let loads = 0, unloaded = 0, block, resume;
 class TestCache {
   async put(input, value) { cacheEntries.set(String(input), value); }
   async match(input) { return cacheEntries.get(String(input)); }
 }
 class TestEngine {
-  constructor() { this.chat = { completions: { create: async () => (async function* () { if (block) await block; yield { choices: [{ delta: { content: 'fixture' }, finish_reason: 'stop' }] }; })() } }; }
+  constructor() { this.chat = { completions: { create: async request => { modelRequests.push(request); return (async function* () { if (block) await block; yield { choices: [{ delta: { content: 'fixture' }, finish_reason: 'stop' }] }; })(); } } }; }
   async reload() { loads++; }
   async unload() { unloaded++; }
   interruptGenerate() { resume?.(); }
 }
 const context = vm.createContext({ MODEL_ID: 'test', MODEL_BASE, TF_BASE, TF_CACHE, MLCEngine: TestEngine, validateText, messagesFor, validateSettings, targetLanguage,
   detectDeviceSupport: async backend => ({ backend, supported: !!context.navigator.gpu, summary: context.navigator.gpu ? 'WebGPU 可用' : '不支持 WebGPU', checks: [], warnings: [] }),
-  fetch: async input => { network.push(String(input)); return { ok: true }; }, Cache: TestCache,
+  fetch: async (input, init) => { network.push(String(input)); requests.push(init); return { ok: true, json: async () => ({ choices: [{ message: { content: 'API fixture' } }] }) }; }, Cache: TestCache,
   caches: { open: async () => new TestCache(), match: async url => cacheEntries.get(url), keys: async () => ['webllm/model', TF_CACHE], delete: async () => cacheEntries.clear() },
   navigator: { gpu: { requestAdapter: async () => ({ limits: { maxBufferSize: 2 ** 30 }, info: { vendor: 'test' } }) } },
   postMessage: data => outputs.push(data), URL, AbortController, setTimeout: () => 1, clearTimeout() {}, self: {} });
@@ -94,6 +95,13 @@ await command('translate', { text: 'Hello' });
 await command('translate', { text: '你好' });
 assert.equal(loads, 1, 'selections must reuse the engine');
 assert.equal(network.length, 0, 'cached translation must never fetch remote data');
+const glossarySettings = { ...DEFAULTS, glossary: 'GPU = 图形处理器\nsecret = 私有术语', glossaryTarget: 'zh' };
+await command('translate', { text: 'GPU', settings: glossarySettings });
+assert.equal(JSON.parse(modelRequests.at(-1).messages[1].content).preferred_terms.length, 1);
+await command('translate', { text: 'GPU', settings: { ...glossarySettings, mode: 'api', endpoint: 'http://localhost/translate', apiModel: 'fixture' } });
+assert.equal(JSON.parse(JSON.parse(requests.at(-1).body).messages[1].content).preferred_terms[0].translation, '图形处理器');
+assert.ok(!requests.at(-1).body.includes('私有术语'));
+network.length = 0;
 await command('translate', { text: 'Whole-page segment', recordHistory: false });
 const pageResult = outputs.filter(message => message.result === 'fixture').at(-1);
 assert.equal(pageResult.translationRecord, undefined, 'whole-page batches must not fill selection history');

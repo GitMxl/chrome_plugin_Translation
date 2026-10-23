@@ -12,7 +12,7 @@ const source = (await fs.readFile(new URL('../options.js', import.meta.url), 'ut
 for (const browser of [{}, { runtime: { id: 'old-extension', connect() { throw new Error('Extension context invalidated.'); } } }]) {
   const elements = new Map(), timers = new Set();
   const document = { getElementById(id) {
-    if (!elements.has(id)) elements.set(id, { value: DEFAULTS[id] || '', textContent: '', addEventListener() {} });
+    if (!elements.has(id)) elements.set(id, { value: DEFAULTS[id] || '', textContent: '', addEventListener() {}, querySelector() { return { remove() {} }; } });
     return elements.get(id);
   } };
   const context = vm.createContext({ document, chrome: browser, DEFAULTS, MAX_INPUT, validateSettings, validateText, languageLabel, populateTargets() {},

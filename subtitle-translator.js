@@ -144,7 +144,7 @@
         const settings = await request('settings');
         if (run !== epoch) return;
         translationTarget = targetSelect.value || undefined;
-        const key = JSON.stringify([settings.mode, settings.engine, settings.target, translationTarget, videoSelect.value, source]);
+        const key = JSON.stringify([settings.mode, settings.engine, settings.target, translationTarget, videoSelect.value, source, settings.glossaryRevision || '']);
         if (settings.mode === 'api' && approval !== key) {
           approval = key; setButtonLabel(startButton, '确认使用 API 翻译字幕');
           status.textContent = 'API 模式会持续发送当前字幕文字至你配置的服务。点击确认后开始，不发送视频或音频。'; return;

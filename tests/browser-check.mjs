@@ -71,8 +71,8 @@ function cdp(method, params = {}, sessionId) {
     child.stdio[3].write(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }) + '\0');
   });
 }
-async function evaluate(session, expression) {
-  const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, session);
+async function evaluate(session, expression, userGesture = false) {
+  const result = await cdp('Runtime.evaluate', { expression, userGesture, awaitPromise: true, returnByValue: true }, session);
   if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
   return result.result.value;
 }
@@ -277,13 +277,43 @@ try {
     console.log('IMAGE_TRANSLATION',JSON.stringify(evidence.at(-1)));
   }
   console.log('FIRST_USE', first);
+  if (process.argv.includes('--glossary')) {
+    const waitFor = async expression => {
+      for (let i = 0; i < 80; i++) { if (await evaluate(sessionId, expression)) return; await pause(100); }
+      throw new Error('Glossary condition timed out: ' + expression + ' UI: ' + await evaluate(sessionId, `document.getElementById('message').textContent + ' / ' + Array.from(document.querySelectorAll(':invalid'), e=>e.id+':'+e.validationMessage).join(',')`));
+    };
+    const glossary = 'GPU = 图形处理器\nsecret = 不应发送';
+    await evaluate(sessionId, `document.getElementById('glossary').value=${JSON.stringify(glossary)};document.getElementById('settings').requestSubmit()`);
+    await waitFor(`(async()=> (await chrome.storage.local.get('settings')).settings?.glossary===${JSON.stringify(glossary)})()`);
+    await cdp('Page.reload', {}, sessionId);
+    await waitFor(`document.getElementById('glossary')?.value===${JSON.stringify(glossary)}`);
+    await evaluate(sessionId, `document.getElementById('glossary').value='GPU = A\\ngpu = B';document.getElementById('settings').requestSubmit()`);
+    await waitFor(`document.getElementById('message').textContent.includes('重复')`);
+    if (await evaluate(sessionId, `(async()=> (await chrome.storage.local.get('settings')).settings.glossary)()`) !== glossary) throw new Error('Invalid glossary overwrote saved value');
+    const bgTarget = (await cdp('Target.getTargets')).targetInfos.find(item => item.url === origin + '/background.js');
+    const bg = await cdp('Target.attachToTarget', { targetId: bgTarget.targetId, flatten: true });
+    const grant = await cdp('Runtime.evaluate', { expression: `chrome.permissions.request({origins:['http://127.0.0.1/*']})`, userGesture: true, awaitPromise: true, returnByValue: true }, bg.sessionId);
+    if (!grant.result?.value) throw new Error('Test API permission denied');
+    // Provision the controlled API in the isolated profile, as in the image/subtitle tests.
+    await evaluate(sessionId, `(async()=>{const {settings}=await chrome.storage.local.get('settings');await chrome.storage.local.set({settings:{...settings,mode:'api',endpoint:'http://127.0.0.1:${server.address().port}/image-api',apiModel:'fixture'}});document.getElementById('glossary').value=${JSON.stringify(glossary)};document.getElementById('mode').value='api';document.getElementById('mode').dispatchEvent(new Event('change'));})()`);
+    await waitFor(`(async()=> (await chrome.storage.local.get('settings')).settings?.mode==='api')()`);
+    await waitFor(`!document.getElementById('translate').disabled`);
+    await evaluate(sessionId, `document.getElementById('source').value='GPU';document.getElementById('translate').click()`);
+    await waitFor(`document.getElementById('translation').textContent==='你好，世界！' && document.getElementById('cancel').disabled`);
+    const data = JSON.parse(imageAPIRequests.at(-1).messages[1].content);
+    if (data.source_text !== 'GPU' || data.preferred_terms?.length !== 1 || data.preferred_terms[0].translation !== '图形处理器') throw new Error('Glossary API payload mismatch');
+    await evaluate(sessionId, `document.getElementById('mode').value='local';document.getElementById('mode').dispatchEvent(new Event('change'));document.getElementById('glossary').value='';document.getElementById('settings').requestSubmit()`);
+    await waitFor(`(async()=> (await chrome.storage.local.get('settings')).settings?.glossary==='')()`);
+    evidence.push({ type: 'glossary', saveReload: true, invalidRejected: true, matchingOnlyAPIPayload: true, clear: true, realInference: false });
+    console.log('GLOSSARY', JSON.stringify(evidence.at(-1)));
+  }
   if (process.argv.includes('--ui')) {
     const layouts = [];
     for (const width of [360, 560, 1200]) {
       await cdp('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
       await evaluate(sessionId, `window.scrollTo(0,0)`);
       const layout = await evaluate(sessionId, `({width:innerWidth,clientWidth:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,main:document.querySelector('main').getBoundingClientRect().width,source:document.getElementById('source').getBoundingClientRect().width,navLinks:[...document.querySelectorAll('.section-nav a')].every(a=>!!document.querySelector(a.getAttribute('href'))),hiddenPreserved:document.getElementById('api-fields').hidden && getComputedStyle(document.getElementById('api-fields')).display==='none'})`);
-      if (layout.scrollWidth > layout.clientWidth || !layout.navLinks || !layout.hiddenPreserved || layout.source < 200) throw new Error('Responsive UI failed: '+JSON.stringify(layout));
+      if (layout.scrollWidth > layout.clientWidth || !layout.navLinks || !layout.hiddenPreserved || layout.source < 200) throw new Error('Responsive UI failed: '+JSON.stringify(layout)+' overflow: '+await evaluate(sessionId, `JSON.stringify(Array.from(document.querySelectorAll('main *')).filter(e=>e.getBoundingClientRect().right>document.documentElement.clientWidth).map(e=>({tag:e.tagName,id:e.id,right:e.getBoundingClientRect().right})))`));
       await cdp('Page.enable', {}, sessionId);
       const screenshot = await cdp('Page.captureScreenshot', {format:'png'}, sessionId);
       await fs.writeFile(`tests/ui-${width}.png`,Buffer.from(screenshot.data,'base64'));

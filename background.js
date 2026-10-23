@@ -74,7 +74,7 @@ chrome.runtime.onConnect.addListener(port => {
       const command = message.command;
       if (command === 'settings') {
         const { settings } = await chrome.storage.local.get('settings');
-        send({ id, result: privileged ? { ...DEFAULTS, ...settings } : { mode: settings?.mode || 'local', engine: settings?.engine || 'webllm', target: settings?.target || 'auto' } });
+        send({ id, result: privileged ? { ...DEFAULTS, ...settings } : { mode: settings?.mode || 'local', engine: settings?.engine || 'webllm', target: settings?.target || 'auto', glossaryRevision: settings?.glossaryRevision || '' } });
         return;
       }
       if (command === 'open-settings') { await chrome.runtime.openOptionsPage(); send({ id, result: true }); return; }
@@ -108,6 +108,9 @@ chrome.runtime.onConnect.addListener(port => {
           const origin = new URL(settings.endpoint).origin + '/*';
           if (!await chrome.permissions.contains({ origins: [origin] })) throw new Error('尚未授权 API 站点访问权限。');
         }
+        const { settings: previous } = await chrome.storage.local.get('settings');
+        settings.glossaryRevision = settings.glossary !== (previous?.glossary || '') || settings.glossaryTarget !== (previous?.glossaryTarget || DEFAULTS.glossaryTarget)
+          ? crypto.randomUUID() : previous?.glossaryRevision || '';
         await chrome.storage.local.set({ settings });
         await ensureEngine();
         await chrome.runtime.sendMessage({ target: 'engine', command: 'reset', owner, id });
@@ -120,6 +123,7 @@ chrome.runtime.onConnect.addListener(port => {
       const config = { ...DEFAULTS, ...settings };
       if (['download', 'clear', 'release'].includes(command) && message.engine !== config.engine) throw new Error('推理引擎设置已变化，请重新打开设置页并确认后操作。');
       if (command === 'translate') validateText(message.text);
+      if (command === 'translate' && (message.pageTranslation || message.imageTranslation || message.subtitleTranslation) && (message.settingsSnapshot?.glossaryRevision || '') !== (config.glossaryRevision || '')) throw new Error('术语表已变更，请重新开始整页或字幕翻译；图片翻译请重新截图。');
       if (command === 'translate' && (message.pageTranslation || message.imageTranslation || message.subtitleTranslation) && ['mode', 'engine', 'target'].some(key => message.settingsSnapshot?.[key] !== config[key])) throw new Error(message.subtitleTranslation ? '翻译设置已变更，请停止并重新开始字幕翻译，确认当前模式。' : message.imageTranslation ? '翻译设置已变更，请重新截图以确认当前模式。' : '翻译设置已变更，请停止后重新启动整页翻译，确认当前模式。');
       if (command === 'translate' && message.translationTarget !== undefined) {
         if (!isTargetLanguage(message.translationTarget)) throw new Error('无效的目标语言。');

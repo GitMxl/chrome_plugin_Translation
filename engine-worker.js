@@ -84,7 +84,7 @@ async function apiTranslate(job, text) {
   const settings = validateSettings(job.settings);
   const response = await nativeFetch(settings.endpoint, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}) },
-    body: JSON.stringify({ model: settings.apiModel, messages: messagesFor(text, settings.target), temperature: 0, max_tokens: 1600, stream: false }), signal: current.controller.signal, credentials: 'omit', redirect: 'error'
+    body: JSON.stringify({ model: settings.apiModel, messages: messagesFor(text, settings.target, settings), temperature: 0, max_tokens: 1600, stream: false }), signal: current.controller.signal, credentials: 'omit', redirect: 'error'
   });
   if (!response.ok) throw new Error(`API 请求失败（HTTP ${response.status}），请检查地址、权限、模型和密钥。`);
   const result = (await response.json()).choices?.[0]?.message?.content;
@@ -126,13 +126,13 @@ self.onmessage = async ({ data: job }) => {
         if (current.cancelled) throw new Error('已取消翻译。');
         publish({ phase: 'translating', text: '正在本地翻译…' });
         if (engine.translate) {
-          result = await engine.translate(messagesFor(text, job.settings.target), partial => {
+          result = await engine.translate(messagesFor(text, job.settings.target, job.settings), partial => {
             if (!current.cancelled) send({ owner: job.owner, id: job.id, partial });
           });
         } else {
           result = '';
           let finishReason;
-          const stream = await engine.chat.completions.create({ messages: messagesFor(text, job.settings.target), temperature: 0, max_tokens: 1600, stream: true });
+          const stream = await engine.chat.completions.create({ messages: messagesFor(text, job.settings.target, job.settings), temperature: 0, max_tokens: 1600, stream: true });
           for await (const chunk of stream) {
             if (current.cancelled) { engine.interruptGenerate(); break; }
             result += chunk.choices[0]?.delta?.content || '';
