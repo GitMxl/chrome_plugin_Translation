@@ -1,5 +1,7 @@
 import { DEFAULTS, validateSettings, validateText, MAX_INPUT, extensionRuntime, EXTENSION_CONTEXT_ERROR, populateTargets, languageLabel } from './shared.js';
+import './sidepanel-view.js';
 const $ = id => document.getElementById(id);
+const sidePanelView = document.body?.dataset?.view === 'sidepanel';
 populateTargets($('target'));
 populateTargets($('glossaryTarget'));
 $('glossaryTarget').querySelector('option[value="auto"]').remove();
@@ -30,6 +32,7 @@ function updateAvailability() {
   $('cancel').disabled = !active;
   $('input-clear').disabled = !!active;
   $('input-copy').disabled = !!active || !$('translation').textContent;
+  if (sidePanelView) $('sidepanel-target').disabled = !!active;
 }
 function renderSupport(support) {
   if (!support || support.backend !== $('engine').value) return;
@@ -224,17 +227,30 @@ $('translate').addEventListener('click', async () => {
   }
   catch (error) { inputStatus(error.message); countInput(); $('source').focus(); return; }
   const id = `settings-${++serial}`; active = id; historyWarning = ''; $('trial-comparison').hidden = false; $('trial-original').textContent = sourceText; $('translation').textContent = ''; updateAvailability(); inputStatus('正在准备翻译…');
-  try { const text = await call('translate', { text: sourceText }, id); if (active === id) { $('translation').textContent = text; inputStatus(historyWarning || '翻译完成。'); await loadHistory(); } }
+  try { const text = await call('translate', { text: sourceText, ...(sidePanelView && $('sidepanel-target').value ? { translationTarget: $('sidepanel-target').value } : {}) }, id); if (active === id) { $('translation').textContent = text; inputStatus(historyWarning || '翻译完成。'); await loadHistory(); } }
   catch (error) { if (active === id) inputStatus(error.message); }
   finally { active = null; updateAvailability(); }
 });
 $('cancel').addEventListener('click', () => call('cancel').then(() => inputStatus('已请求取消，等待当前操作结束。')).catch(error => inputStatus(error.message)));
+function applySavedSettings(settings) {
+  savedEngine = settings.engine;
+  for (const key of Object.keys(DEFAULTS)) $(key).value = settings[key];
+  if (sidePanelView) $('sidepanel-mode').textContent = `当前模式：${settings.mode === 'api' ? '自定义 API（将发送输入文字）' : '本地模型'} · 默认目标：${languageLabel(settings.target)}`;
+  toggle();
+}
+if (sidePanelView) chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.settings) {
+    applySavedSettings({ ...DEFAULTS, ...changes.settings.newValue });
+    call('status').catch(error => inputStatus(error.message));
+  }
+  if (changes.translationHistory || changes.translationHistoryEnabled) loadHistory();
+});
 try {
   loadHistory();
   const settings = await call('settings');
-  savedEngine = settings.engine;
-  for (const key of Object.keys(DEFAULTS)) $(key).value = settings[key];
-  toggle(); await call('status');
+  applySavedSettings(settings);
+  await call('status');
 } catch (error) {
   inputStatus(error.message);
   $('device').textContent = '扩展初始化失败，请按提示重新打开';

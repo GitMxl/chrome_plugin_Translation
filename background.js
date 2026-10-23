@@ -41,12 +41,19 @@ async function controlSubtitles(command, tabId, videoURL) {
 if (chrome.contextMenus) {
   chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({ id: 'sidepanel-open', title: '打开侧边栏翻译', contexts: ['page', 'selection', 'link', 'image', 'video', 'editable'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
       for (const [id, title] of [['page-start', '翻译整页（双语对照）'], ['page-stop', '停止整页翻译'], ['page-restore', '还原页面翻译']]) chrome.contextMenus.create({ id, title, contexts: ['page', 'selection', 'link'] });
       chrome.contextMenus.create({ id: 'image-capture', title: '图片区域翻译（截图框选）', contexts: ['page', 'image', 'selection', 'link'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
       for (const [id, title] of [['subtitle-start', '开启字幕双语翻译'], ['subtitle-stop', '停止字幕翻译']]) chrome.contextMenus.create({ id, title, contexts: ['page', 'video'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
     });
   });
   chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'sidepanel-open') {
+      const fallback = () => chrome.tabs.create({ url: chrome.runtime.getURL('options.html?view=sidepanel&fallback=1') }).catch(() => {});
+      if (!chrome.sidePanel?.open || !Number.isInteger(tab?.windowId)) return fallback();
+      // Call directly in the menu event to preserve the browser's user gesture.
+      return chrome.sidePanel.open({ windowId: tab.windowId }).catch(fallback);
+    }
     if (['subtitle-start', 'subtitle-stop'].includes(info.menuItemId)) return controlSubtitles(info.menuItemId.slice(9), tab?.id, info.srcUrl).catch(() => {});
     if (info.menuItemId === 'image-capture') return captureImage(tab).catch(error =>
       chrome.tabs.create({ url: chrome.runtime.getURL(`image.html?error=${encodeURIComponent(error.message)}`) }).catch(() => {}));

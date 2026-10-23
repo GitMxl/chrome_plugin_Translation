@@ -7,6 +7,8 @@ let connect, captured = 0, serial = 0, switched = false, failOpen = false;
 let currentURL = 'https://example.test/';
 let installed, menuClick;
 const menus = [];
+const sidePanels = [];
+let failPanel = false;
 const engineRequests = [];
 const pageMessages = [];
 const temporary = { 'image-capture-expired': { created: 0, data: 'old' } }, created = [];
@@ -14,7 +16,7 @@ const runtime = { id: 'test', getURL: file => 'chrome-extension://test/' + file,
   onConnect: { addListener: listener => { connect = listener; } }, onInstalled: { addListener: listener => { installed = listener; } }, onMessage: { addListener() {} }, getContexts: async () => [{}], sendMessage: async message => { engineRequests.push(message); } };
 const context = vm.createContext({ DEFAULTS, validateSettings, validateText, isTargetLanguage, createHistoryStore, Date, encodeURIComponent,
   crypto: { randomUUID: () => `abc-${++serial}` },
-  chrome: { runtime, contextMenus: { removeAll: callback => { menus.length = 0; callback(); }, create: menu => menus.push(menu), onClicked: { addListener: listener => { menuClick = listener; } } }, storage: {
+  chrome: { runtime, sidePanel: { open: async options => { sidePanels.push(options); if (failPanel) throw new Error('panel failed'); } }, contextMenus: { removeAll: callback => { menus.length = 0; callback(); }, create: menu => menus.push(menu), onClicked: { addListener: listener => { menuClick = listener; } } }, storage: {
     local: { get: async () => ({ settings: DEFAULTS }), setAccessLevel: async () => {} },
     session: { get: async () => ({ ...temporary }), set: async value => Object.assign(temporary, value), remove: async keys => { for (const key of [].concat(keys)) delete temporary[key]; } }
   }, tabs: {
@@ -51,6 +53,30 @@ assert.match((await settings('image-capture')).error, /tab failed/);
 assert.equal(Object.keys(temporary).length, before, 'failed tab creation must remove its screenshot');
 failOpen = false;
 installed();
+const panelMenu = menus.find(menu => menu.id === 'sidepanel-open');
+assert.equal(panelMenu.title, '打开侧边栏翻译');
+assert.ok(panelMenu.contexts.includes('selection'));
+assert.ok(panelMenu.contexts.includes('page'));
+assert.deepEqual(Array.from(panelMenu.documentUrlPatterns), ['http://*/*', 'https://*/*']);
+const panelTabsBefore = created.length;
+const openingPanel = menuClick({ menuItemId: 'sidepanel-open', selectionText: 'Do not auto-translate' }, { id: 42, windowId: 27 });
+assert.equal(sidePanels.at(-1).windowId, 27, 'open must run immediately for the originating window');
+await openingPanel;
+assert.equal(created.length, panelTabsBefore, 'successful panel open must not create a tab');
+assert.equal(engineRequests.length, 0, 'opening must not automatically send selected text');
+failPanel = true;
+await menuClick({ menuItemId: 'sidepanel-open' }, { windowId: 27 });
+assert.match(created.at(-1).url, /options\.html\?view=sidepanel&fallback=1$/);
+failPanel = false;
+const panelAPI = context.chrome.sidePanel;
+context.chrome.sidePanel = undefined;
+await menuClick({ menuItemId: 'sidepanel-open' }, { windowId: 27 });
+assert.match(created.at(-1).url, /fallback=1$/);
+context.chrome.sidePanel = panelAPI;
+const openCount = sidePanels.length;
+await menuClick({ menuItemId: 'sidepanel-open' });
+assert.equal(sidePanels.length, openCount, 'missing window must not open another window panel');
+console.log('PASS: side panel context menu, synchronous originating-window open, no automatic translation and failed/unsupported open fallback.');
 const imageMenu = menus.find(menu => menu.id === 'image-capture');
 assert.ok(imageMenu.contexts.includes('image'));
 assert.ok(imageMenu.contexts.includes('page'));

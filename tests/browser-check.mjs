@@ -36,7 +36,7 @@ const server = http.createServer((request, response) => {
       const text = JSON.parse(payload.messages[1].content).source_text;
       const content = payload.model === 'subtitle-fixture' ? (instruction.includes('to Japanese.') ? '字幕訳：' : '字幕译文：') + text : instruction.includes('to Arabic.') ? 'مرحبًا بالعالم!' : instruction.includes('to Japanese.') ? 'こんにちは、世界！' : instruction.includes('to English.') ? 'Hello, world!' : '你好，世界！';
       const send = () => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] })); };
-      if(payload.model==='subtitle-fixture' && text==='Second subtitle.') setTimeout(send,1200); else send();
+      if(['subtitle-fixture','sidepanel-fixture'].includes(payload.model) && text==='Second subtitle.') setTimeout(send,1200); else send();
     });
     return;
   }
@@ -277,6 +277,57 @@ try {
     console.log('IMAGE_TRANSLATION',JSON.stringify(evidence.at(-1)));
   }
   console.log('FIRST_USE', first);
+  if (process.argv.includes('--sidepanel')) {
+    const waitFor = async (session, expression) => {
+      for (let i = 0; i < 100; i++) { if (await evaluate(session, expression)) return; await pause(100); }
+      throw new Error('Side panel timed out: ' + expression + ' / ' + await evaluate(session, `document.getElementById('input-status')?.textContent`));
+    };
+    await waitFor(sessionId, `!document.getElementById('input-sidepanel').disabled`);
+    await evaluate(sessionId, `document.getElementById('input-sidepanel').click()`, true);
+    let panel;
+    for (let i = 0; i < 60; i++) {
+      panel = (await cdp('Target.getTargets')).targetInfos.find(item => item.url === origin + '/options.html?view=sidepanel');
+      if (panel) break; await pause(100);
+    }
+    if (!panel) throw new Error('Browser did not expose an opened side panel: ' + await evaluate(sessionId, `document.getElementById('input-status').textContent`));
+    const panelSession = (await cdp('Target.attachToTarget', { targetId: panel.targetId, flatten: true })).sessionId;
+    await waitFor(panelSession, `document.body?.dataset.view==='sidepanel' && document.getElementById('device')?.textContent!=='正在检测…'`);
+    const bgTarget = (await cdp('Target.getTargets')).targetInfos.find(item => item.url === origin + '/background.js');
+    const bg = await cdp('Target.attachToTarget', { targetId: bgTarget.targetId, flatten: true });
+    const grant = await cdp('Runtime.evaluate', { expression: `chrome.permissions.request({origins:['http://127.0.0.1/*']})`, userGesture: true, awaitPromise: true, returnByValue: true }, bg.sessionId);
+    if (!grant.result?.value) throw new Error('Side panel fixture permission denied');
+    await evaluate(sessionId, `chrome.storage.local.set({settings:{mode:'api',engine:'webllm',target:'zh',endpoint:'http://127.0.0.1:${server.address().port}/image-api',apiModel:'sidepanel-fixture',apiKey:'',glossary:'GPU = 图形处理器',glossaryTarget:'zh'}})`);
+    await waitFor(panelSession, `document.getElementById('sidepanel-mode').textContent.includes('自定义 API') && !document.getElementById('translate').disabled`);
+    await evaluate(panelSession, `document.getElementById('source').value='GPU';document.getElementById('source').dispatchEvent(new Event('input'));document.getElementById('source').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true}))`);
+    await waitFor(panelSession, `document.getElementById('translation').textContent==='你好，世界！' && document.getElementById('cancel').disabled`);
+    const data = JSON.parse(imageAPIRequests.at(-1).messages[1].content);
+    if (data.preferred_terms?.[0].translation !== '图形处理器') throw new Error('Side panel lost glossary');
+    await evaluate(panelSession, `document.getElementById('sidepanel-target').value='ja';document.getElementById('translate').click()`);
+    await waitFor(panelSession, `document.getElementById('translation').textContent==='こんにちは、世界！' && document.getElementById('cancel').disabled`);
+    if (await evaluate(panelSession, `(async()=> (await chrome.storage.local.get('settings')).settings.target)()`) !== 'zh') throw new Error('Side panel modified global target');
+    await waitFor(panelSession, `document.querySelectorAll('.history-card').length>=2`);
+    await evaluate(panelSession, `document.getElementById('source').value='Second subtitle.';document.getElementById('translate').click()`);
+    await waitFor(panelSession, `!document.getElementById('cancel').disabled && document.getElementById('sidepanel-target').disabled`);
+    await evaluate(panelSession, `document.getElementById('cancel').click()`);
+    await waitFor(panelSession, `document.getElementById('input-status').textContent.includes('已取消') && document.getElementById('cancel').disabled && !document.getElementById('sidepanel-target').disabled`);
+    await evaluate(panelSession, `document.getElementById('source').value='GPU'`);
+    const page = await cdp('Target.createTarget', { url: `http://127.0.0.1:${server.address().port}/selection` });
+    await cdp('Target.activateTarget', { targetId: page.targetId });
+    if (await evaluate(panelSession, `document.getElementById('source').value`) !== 'GPU') throw new Error('Switching tabs lost side panel text');
+    const layouts = [];
+    for (const width of [320, 400, 560]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false }, panelSession);
+      const layout = await evaluate(panelSession, `({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,settingsHidden:getComputedStyle(document.getElementById('preferences')).display==='none',historyVisible:getComputedStyle(document.getElementById('history')).display!=='none'})`);
+      if (layout.scroll>layout.width || !layout.settingsHidden || !layout.historyVisible) throw new Error('Side panel layout failed: '+JSON.stringify(layout));
+      layouts.push(layout);
+    }
+    await evaluate(panelSession, `document.getElementById('input-clear').click()`);
+    if (await evaluate(panelSession, `document.getElementById('source').value || document.getElementById('translation').textContent`)) throw new Error('Side panel clear failed');
+    await evaluate(panelSession, `document.getElementById('sidepanel-settings').click()`);
+    if (!(await cdp('Target.getTargets')).targetInfos.some(item=>item.url===origin+'/options.html#preferences')) throw new Error('Side panel settings shortcut failed');
+    evidence.push({type:'sidepanel',nativeOpen:true,apiTranslation:true,glossary:true,temporaryTarget:true,history:true,cancel:true,tabSwitchRetainsText:true,clear:true,settingsShortcut:true,layouts,realInference:false});
+    console.log('SIDEPANEL',JSON.stringify(evidence.at(-1)));
+  }
   if (process.argv.includes('--glossary')) {
     const waitFor = async expression => {
       for (let i = 0; i < 80; i++) { if (await evaluate(sessionId, expression)) return; await pause(100); }
@@ -717,7 +768,7 @@ try {
     }
   }
   const resultFile = process.argv.includes('--ui') ? 'tests/ui-result.json' : process.argv.includes('--input-translation') ? 'tests/input-translation-result.json' : process.argv.includes('--page-translation') ? 'tests/page-translation-result.json' : process.argv.includes('--history-ui') ? 'tests/history-ui-result.json' : process.argv.includes('--history') ? 'tests/history-browser-result.json' : process.argv.includes('--selection-popup') ? 'tests/selection-popup-result.json' : process.argv.includes('--download-button') ? 'tests/download-button-result.json' : process.argv.includes('--device-check') ? 'tests/device-browser-result.json' : process.argv.includes('--transformers') ? (process.argv.includes('--inference') ? 'tests/transformers-browser-result.json' : 'tests/transformers-smoke-result.json') : 'tests/browser-result.json';
-  await fs.writeFile(process.argv.includes('--subtitles') ? 'tests/subtitle-result.json' : process.argv.includes('--image-translation') ? 'tests/image-translation-result.json' : resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
+  await fs.writeFile(process.argv.includes('--sidepanel') ? 'tests/sidepanel-result.json' : process.argv.includes('--subtitles') ? 'tests/subtitle-result.json' : process.argv.includes('--image-translation') ? 'tests/image-translation-result.json' : resultFile, JSON.stringify({ date: new Date().toISOString(), browser: chrome, status, first, inferenceRequested: process.argv.includes('--inference'), evidence }, null, 2));
 } finally {
   server.close();
   await cdp('Browser.close').catch(() => {});

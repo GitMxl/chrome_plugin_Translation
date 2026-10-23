@@ -48,10 +48,12 @@ for (const endpoint of ['http://example.com/v1/chat/completions', 'javascript:al
 assert.equal(validateSettings({ mode: 'api', endpoint: 'http://localhost:8000/v1/chat/completions', apiModel: 'test' }).mode, 'api');
 const manifest = JSON.parse(await fs.readFile(new URL('../manifest.json', import.meta.url)));
 assert.equal(manifest.manifest_version, 3);
+assert.ok(manifest.permissions.includes('sidePanel'));
+assert.equal(manifest.side_panel.default_path, 'options.html?view=sidepanel');
 assert.deepEqual(manifest.content_scripts[0].js, ['languages.js', 'page-translator.js', 'subtitle-translator.js', 'content.js']);
 assert.match(manifest.content_security_policy.extension_pages, /script-src 'self' 'wasm-unsafe-eval';/);
 assert.doesNotMatch(manifest.content_security_policy.extension_pages, /unsafe-inline|https:[^;]*script/);
-for (const file of ['languages.js', 'subtitle-translator.js', 'background.js', 'image.js', 'image-region.js', 'page-translator.js', 'history-store.js', 'shared.js', 'device-support.js', 'content.js', 'offscreen.js', 'engine-worker.js', 'transformers-engine.js', 'options.js', 'vendor/webllm.js', 'vendor/transformers/transformers.min.js']) {
+for (const file of ['sidepanel-view.js', 'languages.js', 'subtitle-translator.js', 'background.js', 'image.js', 'image-region.js', 'page-translator.js', 'history-store.js', 'shared.js', 'device-support.js', 'content.js', 'offscreen.js', 'engine-worker.js', 'transformers-engine.js', 'options.js', 'vendor/webllm.js', 'vendor/transformers/transformers.min.js']) {
   execFileSync(process.execPath, ['--check', file], { cwd: new URL('..', import.meta.url), stdio: 'pipe' });
 }
 assert.equal(WebAssembly.validate(await fs.readFile(new URL('../vendor/qwen2-0.5b-q4f32.wasm', import.meta.url))), true);
